@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Historical Balance Proof</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141925; --line:#232a3a; --fg:#e6e9ef; --mut:#8b93a7; --acc:#5b8cff; --ok:#3fb950; --err:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:720px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mut); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
+  label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.04em; }
+  input { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:#222b3d; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .row > * { flex:1; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .kv:last-child { border-bottom:0; }
+  .kv .k { color:var(--mut); }
+  .kv .v { font-family:ui-monospace,Menlo,monospace; word-break:break-all; text-align:right; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+  .pill.ok { background:rgba(63,185,80,.15); color:var(--ok); }
+  .pill.err { background:rgba(248,81,73,.15); color:var(--err); }
+  .muted { color:var(--mut); font-size:13px; }
+  .hidden { display:none; }
+  #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
+  a { color:var(--acc); }
+  nav a { margin-right:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="muted"><a href="./index.html">Validator identity</a><a href="./balance.html"><b>Historical balance</b></a></nav>
+  <h1>Historical Balance Proof</h1>
+  <p class="sub">Prove on-chain that an address held a given ETH balance ~100 blocks ago — verified from the block hash and a Merkle-Patricia state proof. No oracle.</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="connect">Connect wallet</button>
+      <div class="muted" style="flex:2; text-align:right;"><span class="pill" id="netBadge"></span> <span id="acct">not connected</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Proof service URL</label>
+    <input id="svc" value="http://localhost:8081" />
+    <label>Contract address (HistoricalBalanceVerifier)</label>
+    <input id="contract" placeholder="0x…" />
+    <label>Account to prove</label>
+    <div class="row">
+      <input id="addr" placeholder="0x… (defaults to your wallet)" style="flex:3;" />
+      <button id="gen" style="flex:1;">Generate proof</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="proofCard">
+    <div class="kv"><span class="k">Account</span><span class="v" id="pAcc"></span></div>
+    <div class="kv"><span class="k">Target block</span><span class="v" id="pBlock"></span></div>
+    <div class="kv"><span class="k">Age (blocks)</span><span class="v" id="pAge"></span></div>
+    <div class="kv"><span class="k">Balance (per node)</span><span class="v" id="pBal"></span></div>
+    <div style="margin-top:14px;" class="row">
+      <button id="verify" class="secondary">Verify (read-only)</button>
+      <button id="record">Record on-chain</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0;">
+      <b>Verify</b> runs the proof through the contract via <code>eth_call</code> (no gas) and shows the
+      trustlessly-verified balance. <b>Record</b> sends a tx that stores the attestation + emits an event.
+    </p>
+  </div>
+
+  <div class="card hidden" id="statusCard">
+    <div class="kv"><span class="k">Contract-verified balance</span><span class="v" id="sBal"></span></div>
+    <div class="kv"><span class="k">Recorded on-chain</span><span class="v" id="sRec"></span></div>
+  </div>
+
+  <div class="card"><div id="log">Ready.</div></div>
+</div>
+
+<script type="module">
+import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.13.4/+esm";
+
+// ---- network config (one-line migration; or load ?net=mainnet) ----
+const NETWORKS = {
+  sepolia: { chainId: 11155111, hex: "0xaa36a7", name: "Sepolia", explorer: "https://sepolia.etherscan.io" },
+  mainnet: { chainId: 1,        hex: "0x1",      name: "Ethereum", explorer: "https://etherscan.io" },
+};
+const ACTIVE = NETWORKS[(new URLSearchParams(location.search).get("net")) || "sepolia"] || NETWORKS.sepolia;
+
+const ABI = [
+  "function verifyBalanceAt(uint256 targetBlock, bytes headerRLP, address account, bytes[] accountProof) view returns (uint256)",
+  "function attest(uint256 targetBlock, bytes headerRLP, address account, bytes[] accountProof) returns (uint256)",
+  "function provenBalanceWei(address, uint256) view returns (uint256)",
+  "function isProven(address, uint256) view returns (bool)",
+  "function MIN_AGE() view returns (uint256)",
+];
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2); };
+const append = (m) => { $("log").textContent += "\n" + m; };
+const eth = (wei) => Number(ethers.formatEther(wei)).toFixed(6) + " ETH";
+
+$("netBadge").textContent = ACTIVE.name;
+$("netBadge").classList.add(ACTIVE.chainId === 1 ? "err" : "ok");
+
+let provider, signer, account, proof;
+
+function contract(readOnly = false) {
+  const addr = $("contract").value.trim();
+  if (!ethers.isAddress(addr)) throw new Error("Enter a valid contract address");
+  return new ethers.Contract(addr, ABI, readOnly ? provider : signer);
+}
+
+async function ensureChain() {
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) === ACTIVE.chainId) return true;
+  log(`Switching to ${ACTIVE.name} …`);
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ACTIVE.hex }] });
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    return true;
+  } catch {
+    log(`Please switch your wallet to ${ACTIVE.name} (chainId ${ACTIVE.chainId}).`);
+    return false;
+  }
+}
+
+$("connect").onclick = async () => {
+  if (!window.ethereum) return log("No injected wallet found (install MetaMask).");
+  provider = new ethers.BrowserProvider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  signer = await provider.getSigner();
+  if (!(await ensureChain())) return;
+  account = await signer.getAddress();
+  $("acct").textContent = account;
+  if (!$("addr").value) $("addr").value = account;
+  log("Connected to " + ACTIVE.name + ": " + account);
+};
+
+$("gen").onclick = async () => {
+  try {
+    const addr = ($("addr").value || account || "").trim();
+    if (!ethers.isAddress(addr)) return log("Enter a valid account address.");
+    const url = $("svc").value.replace(/\/$/, "") + "/balance-proof/" + addr;
+    log("Requesting proof from " + url + " …");
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    proof = data;
+
+    $("pAcc").textContent = data.address;
+    $("pBlock").textContent = data.targetBlock + "  (head " + data.currentBlock + ")";
+    $("pAge").textContent = data.age;
+    $("pBal").textContent = eth(data.reportedBalanceWei);
+    $("proofCard").classList.remove("hidden");
+    log("Proof ready. Target block " + data.targetBlock + ".");
+  } catch (e) {
+    log("Proof error: " + (e.message || e));
+  }
+};
+
+function callArgs() {
+  return [proof.targetBlock, proof.headerRLP, proof.address, proof.accountProof];
+}
+
+$("verify").onclick = async () => {
+  try {
+    const bal = await contract(true).verifyBalanceAt(...callArgs());
+    $("sBal").innerHTML = '<span class="pill ok">' + eth(bal) + "</span>";
+    $("sRec").textContent = "—";
+    $("statusCard").classList.remove("hidden");
+    log("✓ Contract verified the proof. Balance = " + eth(bal));
+  } catch (e) {
+    log("✗ verify reverted: " + (e.shortMessage || e.message || e));
+  }
+};
+
+$("record").onclick = async () => {
+  try {
+    if (!(await ensureChain())) return;
+    const c = contract();
+    log("Sending attest …");
+    const tx = await c.attest(...callArgs());
+    append("tx: " + ACTIVE.explorer + "/tx/" + tx.hash);
+    await tx.wait();
+    append("✓ mined");
+    await loadStatus();
+  } catch (e) {
+    append("✗ " + (e.shortMessage || e.message || e));
+  }
+};
+
+async function loadStatus() {
+  const c = contract(true);
+  const proven = await c.isProven(proof.address, proof.targetBlock);
+  const bal = await c.provenBalanceWei(proof.address, proof.targetBlock);
+  $("sBal").innerHTML = '<span class="pill ok">' + eth(bal) + "</span>";
+  $("sRec").innerHTML = proven ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
+  $("statusCard").classList.remove("hidden");
+}
+</script>
+</body>
+</html>

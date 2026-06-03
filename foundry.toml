@@ -1,0 +1,10 @@
+[profile.default]
+src = "."
+out = "out"
+test = "test"
+libs = ["lib"]
+solc = "0.8.26"
+evm_version = "prague"
+# The contracts live at the repo root; ignore non-contract dirs.
+skip = ["proof-service/**", "balance-proof-service/**", "frontend/**"]
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
