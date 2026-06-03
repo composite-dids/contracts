@@ -36,9 +36,22 @@ contract BeaconStakeVerifier {
     uint256 constant BLOCK_TREE_DEPTH = 3;
 
     // BeaconState (Deneb): 28 fields -> depth 5. `validators` is field 11.
-    // ELECTRA: 37 fields -> depth 6. Change this to 6 for post-Pectra proofs.
-    uint256 constant BEACON_STATE_TREE_DEPTH = 5;
+    // ELECTRA: 37 fields -> depth 6. The field count crossing 32 bumped the depth.
+    //
+    // Because this changes per fork, it is an immutable set at construction time
+    // instead of a hardcoded constant. Deploy one instance per fork:
+    //   Deneb   -> BEACON_STATE_TREE_DEPTH = 5
+    //   Electra -> BEACON_STATE_TREE_DEPTH = 6   (current mainnet)
+    // The proof service reports which value to use (validatorProof.length - 41).
+    uint256 public immutable BEACON_STATE_TREE_DEPTH;
     uint256 constant VALIDATORS_FIELD_INDEX = 11;
+
+    /// @param beaconStateTreeDepth SSZ merkle depth of the BeaconState container
+    ///        for the fork your proofs target (Deneb = 5, Electra = 6).
+    constructor(uint256 beaconStateTreeDepth) {
+        require(beaconStateTreeDepth >= 5 && beaconStateTreeDepth <= 8, "bad state depth");
+        BEACON_STATE_TREE_DEPTH = beaconStateTreeDepth;
+    }
 
     // validators: List[Validator, 2**40]. Tree depth 40, +1 for the length mixin.
     uint256 constant VALIDATOR_LIST_DEPTH = 40;
@@ -78,6 +91,21 @@ contract BeaconStakeVerifier {
         bytes32 beaconStateRoot,
         bytes32[] calldata stateRootProof
     ) external view returns (ValidatorInfo memory info) {
+        return _proveValidator(
+            beaconTimestamp, validatorIndex, validatorFields, validatorProof, beaconStateRoot, stateRootProof
+        );
+    }
+
+    /// @dev Internal core so subclasses (e.g. identity binding) can reuse the proof
+    ///      verification without re-implementing it.
+    function _proveValidator(
+        uint256 beaconTimestamp,
+        uint40 validatorIndex,
+        bytes32[8] calldata validatorFields,
+        bytes32[] calldata validatorProof,
+        bytes32 beaconStateRoot,
+        bytes32[] calldata stateRootProof
+    ) internal view returns (ValidatorInfo memory info) {
         // 1. Fetch the trusted root from EIP-4788.
         bytes32 beaconBlockRoot = _beaconBlockRoot(beaconTimestamp);
 

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Beacon Validator Identity</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141925; --line:#232a3a; --fg:#e6e9ef; --mut:#8b93a7; --acc:#5b8cff; --ok:#3fb950; --err:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:720px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mut); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
+  label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.04em; }
+  input { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:#222b3d; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .row > * { flex:1; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .kv:last-child { border-bottom:0; }
+  .kv .k { color:var(--mut); }
+  .kv .v { font-family:ui-monospace,Menlo,monospace; word-break:break-all; text-align:right; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+  .pill.ok { background:rgba(63,185,80,.15); color:var(--ok); }
+  .pill.err { background:rgba(248,81,73,.15); color:var(--err); }
+  .muted { color:var(--mut); font-size:13px; }
+  .hidden { display:none; }
+  #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
+  a { color:var(--acc); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Beacon Validator Identity</h1>
+  <p class="sub">Prove you control an Ethereum validator's withdrawal address — verified on-chain against the beacon validator set (EIP-4788).</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="connect">Connect wallet</button>
+      <div class="muted" style="flex:2; text-align:right;"><span class="pill" id="netBadge"></span> <span id="acct">not connected</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Proof service URL</label>
+    <input id="svc" value="http://localhost:8080" />
+    <label>Contract address (BeaconIdentityVerifier)</label>
+    <input id="contract" placeholder="0x…" />
+    <label>Validator index</label>
+    <div class="row">
+      <input id="vindex" placeholder="e.g. 123456" inputmode="numeric" style="flex:3;" />
+      <button id="gen" style="flex:1;">Generate proof</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="proofCard">
+    <div class="kv"><span class="k">Withdrawal address</span><span class="v" id="pAddr"></span></div>
+    <div class="kv"><span class="k">Credentials type</span><span class="v" id="pCreds"></span></div>
+    <div class="kv"><span class="k">Effective balance</span><span class="v" id="pBal"></span></div>
+    <div class="kv"><span class="k">Exited</span><span class="v" id="pExit"></span></div>
+    <div class="kv"><span class="k">Target slot</span><span class="v" id="pSlot"></span></div>
+    <div class="kv"><span class="k">State tree depth</span><span class="v" id="pDepth"></span></div>
+    <div class="kv"><span class="k">Matches your wallet</span><span class="v" id="pMatch"></span></div>
+    <div style="margin-top:14px;" class="row">
+      <button id="bind">Verify — direct tx</button>
+      <button id="sign" class="secondary">Verify — via signature</button>
+    </div>
+    <p class="muted" id="pathNote" style="margin:10px 0 0;">
+      <b>Direct</b>: your wallet sends the tx and must equal the withdrawal address.
+      <b>Signature</b>: your wallet signs a message (recoverable to the withdrawal address); a relayer could submit it for you.
+    </p>
+  </div>
+
+  <div class="card hidden" id="statusCard">
+    <div class="kv"><span class="k">On-chain status</span><span class="v" id="sStatus"></span></div>
+    <div class="kv"><span class="k">Recorded balance</span><span class="v" id="sBal"></span></div>
+  </div>
+
+  <div class="card"><div id="log">Ready.</div></div>
+</div>
+
+<script type="module">
+import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.13.4/+esm";
+
+// ---- network config -----------------------------------------------------
+// To migrate to another chain, change ACTIVE and (if needed) add an entry.
+// chainId values are decimal; `hex` is what wallets expect for switching.
+const NETWORKS = {
+  sepolia: { chainId: 11155111, hex: "0xaa36a7", name: "Sepolia", explorer: "https://sepolia.etherscan.io" },
+  mainnet: { chainId: 1,        hex: "0x1",      name: "Ethereum", explorer: "https://etherscan.io" },
+};
+const ACTIVE = NETWORKS[(new URLSearchParams(location.search).get("net")) || "sepolia"] || NETWORKS.sepolia;
+
+const ABI = [
+  "function verifyAndBind(uint256 beaconTimestamp, uint40 validatorIndex, bytes32[8] validatorFields, bytes32[] validatorProof, bytes32 beaconStateRoot, bytes32[] stateRootProof)",
+  "function verifyWithSignature(uint256 beaconTimestamp, uint40 validatorIndex, bytes32[8] validatorFields, bytes32[] validatorProof, bytes32 beaconStateRoot, bytes32[] stateRootProof, uint256 nonce, bytes signature)",
+  "function identityMessageHash(address account, uint40 validatorIndex, uint256 nonce) view returns (bytes32)",
+  "function nonces(address) view returns (uint256)",
+  "function isVerified(address) view returns (bool)",
+  "function effectiveBalanceGweiOf(address) view returns (uint64)",
+  "function BEACON_STATE_TREE_DEPTH() view returns (uint256)",
+];
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2); };
+
+// Show which chain this UI targets.
+$("netBadge").textContent = ACTIVE.name;
+$("netBadge").classList.add(ACTIVE.chainId === 1 ? "err" : "ok");
+const append = (m) => { $("log").textContent += "\n" + m; };
+
+let provider, signer, account, proof;
+
+function contract(readOnly = false) {
+  const addr = $("contract").value.trim();
+  if (!ethers.isAddress(addr)) throw new Error("Enter a valid contract address");
+  return new ethers.Contract(addr, ABI, readOnly ? provider : signer);
+}
+
+async function ensureChain() {
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) === ACTIVE.chainId) return true;
+  log(`Wrong network. Switching to ${ACTIVE.name} …`);
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ACTIVE.hex }] });
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    return true;
+  } catch (e) {
+    log(`Please switch your wallet to ${ACTIVE.name} (chainId ${ACTIVE.chainId}).`);
+    return false;
+  }
+}
+
+$("connect").onclick = async () => {
+  if (!window.ethereum) return log("No injected wallet found (install MetaMask).");
+  provider = new ethers.BrowserProvider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  signer = await provider.getSigner();
+  if (!(await ensureChain())) return;
+  account = (await signer.getAddress());
+  $("acct").textContent = account;
+  log("Connected to " + ACTIVE.name + ": " + account);
+  refreshMatch();
+};
+
+$("gen").onclick = async () => {
+  try {
+    const idx = $("vindex").value.trim();
+    if (!/^\d+$/.test(idx)) return log("Enter a numeric validator index.");
+    const url = $("svc").value.replace(/\/$/, "") + "/proof/" + idx;
+    log("Requesting proof from " + url + " …");
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    proof = data;
+
+    $("pAddr").textContent = data.withdrawalAddress;
+    $("pCreds").textContent = "0x0" + data.credsType + (data.credsType === 0 ? " (BLS — no exec addr)" : "");
+    $("pBal").textContent = (data.effectiveBalanceGwei / 1e9).toFixed(4) + " ETH";
+    $("pExit").textContent = data.exited ? "yes" : "no";
+    $("pSlot").textContent = data.targetSlot;
+    $("pDepth").textContent = data.beaconStateTreeDepth;
+    $("proofCard").classList.remove("hidden");
+    refreshMatch();
+    await checkDepth(data.beaconStateTreeDepth);
+    log("Proof ready for validator " + idx + ".");
+  } catch (e) {
+    log("Proof error: " + (e.message || e));
+  }
+};
+
+function refreshMatch() {
+  if (!proof) return;
+  const matches = account && account.toLowerCase() === proof.withdrawalAddress.toLowerCase();
+  $("pMatch").innerHTML = !account
+    ? '<span class="muted">connect wallet</span>'
+    : matches ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
+  const blockedReason =
+    proof.credsType === 0 ? "validator has no execution withdrawal address"
+    : proof.exited ? "validator has exited"
+    : !matches ? "connect the withdrawal-address wallet to sign"
+    : null;
+  $("bind").disabled = !!blockedReason;
+  $("sign").disabled = !!blockedReason;
+  $("pathNote").dataset.reason = blockedReason || "";
+}
+
+async function checkDepth(depth) {
+  try {
+    const onchain = Number(await contract(true).BEACON_STATE_TREE_DEPTH());
+    if (onchain !== depth) {
+      append(`⚠ Contract state-tree depth is ${onchain} but this proof is for ${depth}. ` +
+             `Deploy a contract built for this fork, or the proof will fail.`);
+    }
+  } catch { /* contract addr not set yet — ignore */ }
+}
+
+function callArgs() {
+  return [
+    proof.beaconTimestamp,
+    proof.validatorIndex,
+    proof.validatorFields,
+    proof.validatorProof,
+    proof.beaconStateRoot,
+    proof.stateRootProof,
+  ];
+}
+
+const txLink = (h) => "tx: " + ACTIVE.explorer + "/tx/" + h;
+
+$("bind").onclick = async () => {
+  try {
+    if (!(await ensureChain())) return;
+    const c = contract();
+    log("Sending verifyAndBind …");
+    const tx = await c.verifyAndBind(...callArgs());
+    append(txLink(tx.hash));
+    await tx.wait();
+    append("✓ mined");
+    await loadStatus();
+  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+};
+
+$("sign").onclick = async () => {
+  try {
+    if (!(await ensureChain())) return;
+    const c = contract();
+    const addr = proof.withdrawalAddress;
+    const nonce = await c.nonces(addr);
+    const digest = await c.identityMessageHash(addr, proof.validatorIndex, nonce);
+    log("Sign this message in your wallet …");
+    const signature = await signer.signMessage(ethers.getBytes(digest));
+    append("signature: " + signature.slice(0, 20) + "…");
+    const tx = await c.verifyWithSignature(...callArgs(), nonce, signature);
+    append(txLink(tx.hash));
+    await tx.wait();
+    append("✓ mined");
+    await loadStatus();
+  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+};
+
+async function loadStatus() {
+  const c = contract(true);
+  const addr = proof.withdrawalAddress;
+  const verified = await c.isVerified(addr);
+  const bal = await c.effectiveBalanceGweiOf(addr);
+  $("sStatus").innerHTML = verified ? '<span class="pill ok">verified</span>' : '<span class="pill err">not verified</span>';
+  $("sBal").textContent = (Number(bal) / 1e9).toFixed(4) + " ETH";
+  $("statusCard").classList.remove("hidden");
+}
+</script>
+</body>
+</html>
