@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.20;
+
+import "@reclaimprotocol/verifier-solidity-sdk/contracts/Reclaim.sol";
+import "@reclaimprotocol/verifier-solidity-sdk/contracts/Addresses.sol";
+
+contract IdentitySignal {
+    address public reclaimAddress;
+
+    // Store ONLY a signal — not the underlying account data.
+    mapping(address => bool) public isVerified;
+    // Optional sybil resistance: track used proofs without revealing the account.
+    mapping(bytes32 => bool) public usedNullifier;
+
+    constructor() {
+        reclaimAddress = Addresses.ETHEREUM; // pick your network
+    }
+
+    function submitVerification(Reclaim.Proof memory proof) external {
+        // 1. Reclaim's deployed contract checks the zkTLS proof. Reverts if invalid.
+        Reclaim(reclaimAddress).verifyProof(proof);
+
+        // 2. Derive a nullifier so the same account can't verify twice,
+        //    WITHOUT storing the identifier itself.
+        bytes32 nullifier = keccak256(abi.encode(proof.signedClaim.claim.identifier));
+        require(!usedNullifier[nullifier], "already used");
+        usedNullifier[nullifier] = true;
+
+        // 3. Record the signal only.
+        isVerified[msg.sender] = true;
+    }
+}
