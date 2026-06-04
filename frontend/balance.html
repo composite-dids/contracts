@@ -37,7 +37,7 @@
 <div class="wrap">
   <nav class="muted"><a href="./index.html">Validator identity</a><a href="./balance.html"><b>Historical balance</b></a></nav>
   <h1>Historical Balance Proof</h1>
-  <p class="sub">Prove on-chain that an address held a given ETH balance ~100 blocks ago — verified from the block hash and a Merkle-Patricia state proof. No oracle.</p>
+  <p class="sub">Prove on-chain that <b>you</b> (the caller) held at least <b>0.1 ETH</b> ~100 blocks ago — verified from the block hash and a Merkle-Patricia state proof. No oracle.</p>
 
   <div class="card">
     <div class="row">
@@ -52,10 +52,8 @@
     <label>Contract address (HistoricalBalanceVerifier)</label>
     <input id="contract" placeholder="0x…" />
     <label>Account to prove</label>
-    <div class="row">
-      <input id="addr" placeholder="0x… (defaults to your wallet)" style="flex:3;" />
-      <button id="gen" style="flex:1;">Generate proof</button>
-    </div>
+    <p class="muted" style="margin:4px 0 10px;">Your connected wallet — the contract binds the proof to <code>msg.sender</code>.</p>
+    <button id="gen">Generate proof for my wallet</button>
   </div>
 
   <div class="card hidden" id="proofCard">
@@ -63,19 +61,21 @@
     <div class="kv"><span class="k">Target block</span><span class="v" id="pBlock"></span></div>
     <div class="kv"><span class="k">Age (blocks)</span><span class="v" id="pAge"></span></div>
     <div class="kv"><span class="k">Balance (per node)</span><span class="v" id="pBal"></span></div>
+    <div class="kv"><span class="k">Meets ≥ 0.1 ETH</span><span class="v" id="pMeets"></span></div>
     <div style="margin-top:14px;" class="row">
       <button id="verify" class="secondary">Verify (read-only)</button>
-      <button id="record">Record on-chain</button>
+      <button id="record">Prove eligibility</button>
     </div>
     <p class="muted" style="margin:10px 0 0;">
       <b>Verify</b> runs the proof through the contract via <code>eth_call</code> (no gas) and shows the
-      trustlessly-verified balance. <b>Record</b> sends a tx that stores the attestation + emits an event.
+      trustlessly-verified balance. <b>Prove eligibility</b> sends a tx (<code>proveSelfBalance</code>) that
+      requires the balance ≥ 0.1 ETH and marks your address eligible.
     </p>
   </div>
 
   <div class="card hidden" id="statusCard">
     <div class="kv"><span class="k">Contract-verified balance</span><span class="v" id="sBal"></span></div>
-    <div class="kv"><span class="k">Recorded on-chain</span><span class="v" id="sRec"></span></div>
+    <div class="kv"><span class="k">Eligible on-chain</span><span class="v" id="sRec"></span></div>
   </div>
 
   <div class="card"><div id="log">Ready.</div></div>
@@ -93,11 +93,12 @@ const ACTIVE = NETWORKS[(new URLSearchParams(location.search).get("net")) || "se
 
 const ABI = [
   "function verifyBalanceAt(uint256 targetBlock, bytes headerRLP, address account, bytes[] accountProof) view returns (uint256)",
-  "function attest(uint256 targetBlock, bytes headerRLP, address account, bytes[] accountProof) returns (uint256)",
-  "function provenBalanceWei(address, uint256) view returns (uint256)",
-  "function isProven(address, uint256) view returns (bool)",
+  "function proveSelfBalance(uint256 targetBlock, bytes headerRLP, bytes[] accountProof) returns (uint256)",
+  "function isEligible(address) view returns (bool)",
   "function MIN_AGE() view returns (uint256)",
+  "function MIN_BALANCE_WEI() view returns (uint256)",
 ];
+const MIN_BALANCE = 100000000000000000n; // 0.1 ETH in wei (UI gate; contract is the source of truth)
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $("log").textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2); };
@@ -138,40 +139,40 @@ $("connect").onclick = async () => {
   if (!(await ensureChain())) return;
   account = await signer.getAddress();
   $("acct").textContent = account;
-  if (!$("addr").value) $("addr").value = account;
   log("Connected to " + ACTIVE.name + ": " + account);
 };
 
 $("gen").onclick = async () => {
   try {
-    const addr = ($("addr").value || account || "").trim();
-    if (!ethers.isAddress(addr)) return log("Enter a valid account address.");
-    const url = $("svc").value.replace(/\/$/, "") + "/balance-proof/" + addr;
-    log("Requesting proof from " + url + " …");
+    if (!account) return log("Connect your wallet first — the proof is for your address.");
+    const url = $("svc").value.replace(/\/$/, "") + "/balance-proof/" + account;
+    log("Requesting proof for " + account + " …");
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
     proof = data;
 
+    const meets = BigInt(data.reportedBalanceWei) >= MIN_BALANCE;
     $("pAcc").textContent = data.address;
     $("pBlock").textContent = data.targetBlock + "  (head " + data.currentBlock + ")";
     $("pAge").textContent = data.age;
     $("pBal").textContent = eth(data.reportedBalanceWei);
+    $("pMeets").innerHTML = meets ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
+    $("record").disabled = !meets;
     $("proofCard").classList.remove("hidden");
-    log("Proof ready. Target block " + data.targetBlock + ".");
+    log(meets
+      ? "Proof ready. Target block " + data.targetBlock + ". You clear the 0.1 ETH threshold."
+      : "Proof ready, but your balance at that block was below 0.1 ETH — proveSelfBalance would revert.");
   } catch (e) {
     log("Proof error: " + (e.message || e));
   }
 };
 
-function callArgs() {
-  return [proof.targetBlock, proof.headerRLP, proof.address, proof.accountProof];
-}
-
 $("verify").onclick = async () => {
   try {
-    const bal = await contract(true).verifyBalanceAt(...callArgs());
-    $("sBal").innerHTML = '<span class="pill ok">' + eth(bal) + "</span>";
+    // Generic view: returns the balance the contract derives for your address.
+    const bal = await contract(true).verifyBalanceAt(proof.targetBlock, proof.headerRLP, proof.address, proof.accountProof);
+    $("sBal").innerHTML = '<span class="pill ' + (bal >= MIN_BALANCE ? "ok" : "err") + '">' + eth(bal) + "</span>";
     $("sRec").textContent = "—";
     $("statusCard").classList.remove("hidden");
     log("✓ Contract verified the proof. Balance = " + eth(bal));
@@ -183,9 +184,12 @@ $("verify").onclick = async () => {
 $("record").onclick = async () => {
   try {
     if (!(await ensureChain())) return;
+    if (account.toLowerCase() !== proof.address.toLowerCase()) {
+      return log("Proof is for " + proof.address + " but your wallet is " + account + ". Regenerate after connecting the right account.");
+    }
     const c = contract();
-    log("Sending attest …");
-    const tx = await c.attest(...callArgs());
+    log("Sending proveSelfBalance …");
+    const tx = await c.proveSelfBalance(proof.targetBlock, proof.headerRLP, proof.accountProof);
     append("tx: " + ACTIVE.explorer + "/tx/" + tx.hash);
     await tx.wait();
     append("✓ mined");
@@ -197,10 +201,10 @@ $("record").onclick = async () => {
 
 async function loadStatus() {
   const c = contract(true);
-  const proven = await c.isProven(proof.address, proof.targetBlock);
-  const bal = await c.provenBalanceWei(proof.address, proof.targetBlock);
+  const eligible = await c.isEligible(proof.address);
+  const bal = await c.verifyBalanceAt(proof.targetBlock, proof.headerRLP, proof.address, proof.accountProof);
   $("sBal").innerHTML = '<span class="pill ok">' + eth(bal) + "</span>";
-  $("sRec").innerHTML = proven ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
+  $("sRec").innerHTML = eligible ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
   $("statusCard").classList.remove("hidden");
 }
 </script>

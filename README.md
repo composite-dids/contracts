@@ -48,24 +48,27 @@ on-chain against the beacon-chain validator set via EIP-4788.
 anyone can submit anyone's proof. Binding to `msg.sender`/signature proves the
 submitter *controls* X, turning a public fact into an identity claim.
 
-## 2. Proof of historical balance
+## 2. Proof of caller's historical balance
 
-Prove on-chain that an address held a given ETH balance ~100 blocks ago — no oracle,
-no trusted party. The EVM can't read historical balances directly, but it can verify
-them: `blockhash(block.number - 100)` is available (last 256 blocks), it commits to
-the header → `stateRoot`, and a Merkle-Patricia proof of `keccak256(address)` against
-that root yields `[nonce, balance, storageRoot, codeHash]`.
+Prove on-chain that **the caller** held at least **0.1 ETH** ~100 blocks ago — no
+oracle, no trusted party. The EVM can't read historical balances directly, but it can
+verify them: `blockhash(block.number - 100)` is available (last 256 blocks), it commits
+to the header → `stateRoot`, and a Merkle-Patricia proof of `keccak256(msg.sender)`
+against that root yields `[nonce, balance, storageRoot, codeHash]`.
 
 - **`HistoricalBalanceVerifier.sol`** — verifies that chain end-to-end (block header
-  RLP + MPT account proof) and returns/records the balance. Includes a self-contained
-  RLP reader and MPT inclusion verifier. `verifyBalanceAt(...)` is a gas-free view;
-  `attest(...)` stores the result and emits `BalanceProven`. `MIN_AGE` (default 100)
-  and the 256-block `BLOCKHASH` window bound the target.
+  RLP + MPT account proof). Includes a self-contained RLP reader and MPT inclusion
+  verifier. `proveSelfBalance(...)` binds the proof to `msg.sender`, requires the
+  balance ≥ `MIN_BALANCE_WEI`, sets `isEligible[msg.sender]`, and emits
+  `EligibilityProven` — the tx signature alone authenticates control of the address.
+  `verifyBalanceAt(...)` remains a gas-free view returning any address's past balance.
+  Constructor: `(minAge, minBalanceWei)` — e.g. `(100, 0.1 ether)`. `MAX_AGE` is the
+  256-block `BLOCKHASH` window.
 - **`balance-proof-service/`** — Node service that calls `eth_getBlockByNumber` +
   `eth_getProof` and rebuilds the fork-exact header RLP. See
   [balance-proof-service/README.md](balance-proof-service/README.md).
-- **`frontend/balance.html`** — same zero-build UI: connect wallet, enter an address,
-  generate the proof, then **Verify** (read-only `eth_call`) or **Record** (tx).
+- **`frontend/balance.html`** — zero-build UI: connect wallet, generate the proof for
+  your own address, then **Verify** (read-only `eth_call`) or **Prove eligibility** (tx).
 
 ### Tests
 
@@ -73,13 +76,14 @@ Foundry tests cover `HistoricalBalanceVerifier` against a **real mainnet block +
 `eth_getProof`** fixture (`test/fixtures/`, regenerate with `gen_fixture.py`):
 
 ```bash
-forge test            # 8 passing: RLP/MPT/header decode offline + full fork path
+forge test            # 10 passing: RLP/MPT/header decode offline + full fork path
 ```
 
 The offline tests validate the hand-written RLP reader, MPT verifier, header parser,
-and balance decode against real data; the `testFork_*` tests run the full
-`verifyBalanceAt` path (including the on-chain `blockhash` link) on a forked chain and
-assert a tampered header reverts.
+and balance decode against real data; the `testFork_*` tests run the full path
+(including the on-chain `blockhash` link) on a forked chain and assert that a tampered
+header, a below-threshold balance, and a wrong caller (`msg.sender` ≠ proven address)
+all revert.
 
 > ⚠ The Solidity RLP/MPT code is hand-written. The account-proof path is exercised by
 > the tests above, but it has **not had a formal audit** — review before trusting it

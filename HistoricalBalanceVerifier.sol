@@ -2,8 +2,10 @@
 pragma solidity ^0.8.20;
 
 /// @title HistoricalBalanceVerifier
-/// @notice Proves on-chain that `account` held a particular ETH balance at a block
-///         ~100 blocks in the past — with no oracle and no trusted party.
+/// @notice Proves on-chain that the *caller* held at least `MIN_BALANCE_WEI` ETH at a
+///         block ~`MIN_AGE` (100) blocks in the past — no oracle, no trusted party.
+///         `proveSelfBalance` binds the proof to msg.sender; `verifyBalanceAt` remains
+///         a generic view that returns any address's balance at a past block.
 ///
 /// @dev Chain of trust (all verified in this contract):
 ///        blockhash(targetBlock)                    -- EVM, last 256 blocks
@@ -23,19 +25,21 @@ contract HistoricalBalanceVerifier {
     using RLPReader for bytes;
     using RLPReader for RLPReader.RLPItem;
 
-    uint256 public constant MAX_AGE = 256; // BLOCKHASH reach
-    uint256 public immutable MIN_AGE;       // how old the target block must be (default 100)
+    uint256 public constant MAX_AGE = 256;    // BLOCKHASH reach
+    uint256 public immutable MIN_AGE;         // how old the target block must be (default 100)
+    uint256 public immutable MIN_BALANCE_WEI; // threshold the caller must prove (default 0.1 ether)
 
-    // account => blockNumber => proven balance (wei). Guard reads with isProven.
-    mapping(address => mapping(uint256 => uint256)) public provenBalanceWei;
-    mapping(address => mapping(uint256 => bool)) public isProven;
+    // The caller proved they controlled an address holding >= MIN_BALANCE_WEI in the past.
+    mapping(address => bool) public isEligible;
 
-    event BalanceProven(address indexed account, uint256 indexed blockNumber, uint256 balanceWei);
+    event EligibilityProven(address indexed account, uint256 indexed blockNumber, uint256 balanceWei);
 
-    /// @param minAge minimum age (in blocks) the target must have. 100 per the spec.
-    constructor(uint256 minAge) {
+    /// @param minAge        minimum age (in blocks) the target must have. 100 per the spec.
+    /// @param minBalanceWei minimum balance the caller must prove (e.g. 0.1 ether).
+    constructor(uint256 minAge, uint256 minBalanceWei) {
         require(minAge >= 1 && minAge <= MAX_AGE, "bad minAge");
         MIN_AGE = minAge;
+        MIN_BALANCE_WEI = minBalanceWei;
     }
 
     // ---------------------------------------------------------------------
@@ -67,19 +71,19 @@ contract HistoricalBalanceVerifier {
     }
 
     // ---------------------------------------------------------------------
-    // Stateful: verify and record an attestation (permissionless — the proof
-    // is self-validating, so anyone may submit it for any address).
+    // Stateful: prove that *the caller* held >= MIN_BALANCE_WEI in the past.
+    // The account is msg.sender, so the transaction signature itself proves
+    // control of the address — no separate signature needed.
     // ---------------------------------------------------------------------
-    function attest(
+    function proveSelfBalance(
         uint256 targetBlock,
         bytes calldata headerRLP,
-        address account,
         bytes[] calldata accountProof
     ) external returns (uint256 balanceWei) {
-        balanceWei = verifyBalanceAt(targetBlock, headerRLP, account, accountProof);
-        provenBalanceWei[account][targetBlock] = balanceWei;
-        isProven[account][targetBlock] = true;
-        emit BalanceProven(account, targetBlock, balanceWei);
+        balanceWei = verifyBalanceAt(targetBlock, headerRLP, msg.sender, accountProof);
+        require(balanceWei >= MIN_BALANCE_WEI, "balance below minimum");
+        isEligible[msg.sender] = true;
+        emit EligibilityProven(msg.sender, targetBlock, balanceWei);
     }
 
     // ---------------------------------------------------------------------

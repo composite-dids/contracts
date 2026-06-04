@@ -6,7 +6,7 @@ import "../HistoricalBalanceVerifier.sol";
 
 /// Exposes the verifier's internals for isolated, fork-free unit testing.
 contract ExposedVerifier is HistoricalBalanceVerifier {
-    constructor(uint256 m) HistoricalBalanceVerifier(m) {}
+    constructor(uint256 minAge, uint256 minBal) HistoricalBalanceVerifier(minAge, minBal) {}
 
     function xParseHeader(bytes calldata h) external pure returns (bytes32 sr, uint256 n) {
         return _parseHeader(h);
@@ -51,7 +51,7 @@ contract HistoricalBalanceTest is Test {
     }
 
     function test_ParseHeader() public {
-        ExposedVerifier v = new ExposedVerifier(1);
+        ExposedVerifier v = new ExposedVerifier(1, 0);
         (bytes32 sr, uint256 n) = v.xParseHeader(headerRLP);
         assertEq(sr, stateRoot, "stateRoot");
         assertEq(n, targetBlock, "block number");
@@ -63,7 +63,7 @@ contract HistoricalBalanceTest is Test {
             MerklePatricia.verifyInclusion(stateRoot, abi.encodePacked(key), accountProof);
         assertTrue(ok, "mpt inclusion failed");
 
-        ExposedVerifier v = new ExposedVerifier(1);
+        ExposedVerifier v = new ExposedVerifier(1, 0);
         assertEq(v.xBalance(acct), balanceWei, "decoded balance");
     }
 
@@ -88,22 +88,43 @@ contract HistoricalBalanceTest is Test {
         vm.createSelectFork(rpc, forkBlock);
         // MIN_AGE=1: the public node prunes deep state, so the fixture is anchored a
         // few blocks back. The blockhash/window logic is identical at any age.
-        ExposedVerifier v = new ExposedVerifier(1);
+        ExposedVerifier v = new ExposedVerifier(1, 0.1 ether);
         uint256 bal = v.verifyBalanceAt(targetBlock, headerRLP, addr, accountProof);
         assertEq(bal, balanceWei, "end-to-end verified balance");
     }
 
-    function testFork_RecordsAttestation() public {
+    function testFork_ProveSelfBalance() public {
         vm.createSelectFork(rpc, forkBlock);
-        ExposedVerifier v = new ExposedVerifier(1);
-        v.attest(targetBlock, headerRLP, addr, accountProof);
-        assertTrue(v.isProven(addr, targetBlock), "isProven");
-        assertEq(v.provenBalanceWei(addr, targetBlock), balanceWei, "stored balance");
+        ExposedVerifier v = new ExposedVerifier(1, 0.1 ether);
+        // The proof is for `addr`, so the caller must be `addr`.
+        vm.prank(addr);
+        v.proveSelfBalance(targetBlock, headerRLP, accountProof);
+        assertTrue(v.isEligible(addr), "caller marked eligible");
+        assertGe(balanceWei, 0.1 ether, "fixture should clear the threshold");
+    }
+
+    function testFork_RevertsWhenBelowMinimum() public {
+        vm.createSelectFork(rpc, forkBlock);
+        // Threshold absurdly high so the real balance can't meet it.
+        ExposedVerifier v = new ExposedVerifier(1, 1_000_000 ether);
+        vm.prank(addr);
+        vm.expectRevert(bytes("balance below minimum"));
+        v.proveSelfBalance(targetBlock, headerRLP, accountProof);
+        assertFalse(v.isEligible(addr), "must not be eligible");
+    }
+
+    function testFork_RevertsOnWrongCaller() public {
+        vm.createSelectFork(rpc, forkBlock);
+        ExposedVerifier v = new ExposedVerifier(1, 0.1 ether);
+        // Caller is not the proven address -> msg.sender proof can't match -> revert.
+        vm.prank(address(0xBEEF));
+        vm.expectRevert();
+        v.proveSelfBalance(targetBlock, headerRLP, accountProof);
     }
 
     function testFork_RevertsOnTamperedHeader() public {
         vm.createSelectFork(rpc, forkBlock);
-        ExposedVerifier v = new ExposedVerifier(1);
+        ExposedVerifier v = new ExposedVerifier(1, 0.1 ether);
         bytes memory bad = headerRLP;
         bad[100] ^= 0x01; // flip a byte -> keccak != blockhash
         vm.expectRevert();
