@@ -15,17 +15,21 @@ pragma solidity ^0.8.20;
 ///          -> account = [nonce, balance, storageRoot, codeHash]
 ///          -> balance (field 1)
 ///
-///      Window: BLOCKHASH only reaches back 256 blocks (~51 min). The target must be
-///      between MIN_AGE and 256 blocks old. The proof service anchors at head-100, so
-///      there is a ~156-block (~31 min) margin to land the transaction.
-///
-///      To reach further back (up to 8191 blocks) on post-Pectra chains, swap the
-///      BLOCKHASH lookup for the EIP-2935 history contract — see _historicalBlockHash.
+///      Window: the target must be between MIN_AGE and MAX_AGE blocks old.
+///      _historicalBlockHash uses the BLOCKHASH opcode for the last 256 blocks and the
+///      EIP-2935 history contract (Pectra) for blocks 257..8191 back (~27 h), so
+///      MAX_AGE = 8191. NOTE: proving deep targets also needs an *archive* RPC for the
+///      eth_getProof state proof — pruned full nodes only keep ~128 recent states.
 contract HistoricalBalanceVerifier {
     using RLPReader for bytes;
     using RLPReader for RLPReader.RLPItem;
 
-    uint256 public constant MAX_AGE = 256;    // BLOCKHASH reach
+    // EIP-2935 history-storage contract (Pectra). Serves the last 8191 block hashes;
+    // the BLOCKHASH opcode covers only the most recent 256. We try the opcode first
+    // (cheap, and works on pre-Pectra chains too), then fall back to this contract.
+    address constant HISTORY_STORAGE_ADDRESS = 0x0000F90827F1C53a10cb7A02335B175320002935;
+
+    uint256 public constant MAX_AGE = 8191;   // EIP-2935 window (BLOCKHASH covers the last 256)
     uint256 public immutable MIN_AGE;         // how old the target block must be (default 100)
     uint256 public immutable MIN_BALANCE_WEI; // threshold the caller must prove (default 0.1 ether)
 
@@ -55,7 +59,7 @@ contract HistoricalBalanceVerifier {
         uint256 age = block.number - targetBlock;
         require(age >= MIN_AGE && age <= MAX_AGE, "outside block window");
 
-        bytes32 bh = blockhash(targetBlock);
+        bytes32 bh = _historicalBlockHash(targetBlock);
         require(bh != bytes32(0), "blockhash unavailable");
         require(keccak256(headerRLP) == bh, "header != blockhash");
 
@@ -89,6 +93,21 @@ contract HistoricalBalanceVerifier {
     // ---------------------------------------------------------------------
     // internals
     // ---------------------------------------------------------------------
+
+    /// @dev Hash of a past block. Uses the BLOCKHASH opcode for the last 256 blocks,
+    ///      then the EIP-2935 history contract for blocks 257..8191 back. Returns 0 if
+    ///      the block is in the future or unavailable in either source.
+    function _historicalBlockHash(uint256 blockNumber) internal view returns (bytes32) {
+        if (blockNumber >= block.number) return bytes32(0);
+        if (block.number - blockNumber <= 256) {
+            return blockhash(blockNumber);
+        }
+        // EIP-2935: pass the block number (32-byte big-endian), get its hash back.
+        (bool ok, bytes memory out) = HISTORY_STORAGE_ADDRESS.staticcall(abi.encode(blockNumber));
+        if (!ok || out.length != 32) return bytes32(0);
+        return abi.decode(out, (bytes32));
+    }
+
     function _parseHeader(bytes calldata headerRLP)
         internal
         pure

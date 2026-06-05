@@ -15,6 +15,10 @@ contract ExposedVerifier is HistoricalBalanceVerifier {
     function xBalance(bytes calldata a) external pure returns (uint256) {
         return _accountBalance(a);
     }
+
+    function xBlockHash(uint256 n) external view returns (bytes32) {
+        return _historicalBlockHash(n);
+    }
 }
 
 /// Tests run against a real mainnet block + eth_getProof fixture
@@ -30,6 +34,8 @@ contract HistoricalBalanceTest is Test {
     bytes[] accountProof;
     uint256 balanceWei;
     string rpc;
+    uint256 deepBlock;
+    bytes32 deepBlockHash;
 
     function setUp() public {
         json = vm.readFile("test/fixtures/balance_mainnet.json");
@@ -42,6 +48,8 @@ contract HistoricalBalanceTest is Test {
         accountProof = vm.parseJsonBytesArray(json, ".accountProof");
         balanceWei = vm.parseUint(vm.parseJsonString(json, ".balanceWei"));
         rpc = vm.parseJsonString(json, ".rpc");
+        deepBlock = vm.parseJsonUint(json, ".deepBlock");
+        deepBlockHash = vm.parseJsonBytes32(json, ".deepBlockHash");
     }
 
     // ---- offline cryptography (no network) ----
@@ -120,6 +128,16 @@ contract HistoricalBalanceTest is Test {
         vm.prank(address(0xBEEF));
         vm.expectRevert();
         v.proveSelfBalance(targetBlock, headerRLP, accountProof);
+    }
+
+    function testFork_BlockHashSources() public {
+        vm.createSelectFork(rpc, forkBlock);
+        ExposedVerifier v = new ExposedVerifier(1, 0);
+        // Recent block (< 256 back): served by the BLOCKHASH opcode.
+        assertEq(v.xBlockHash(targetBlock), blockHash, "opcode path");
+        // Deep block (> 256 back): served by the EIP-2935 history contract.
+        assertGt(forkBlock - deepBlock, 256, "deep block must be beyond BLOCKHASH");
+        assertEq(v.xBlockHash(deepBlock), deepBlockHash, "EIP-2935 path");
     }
 
     function testFork_RevertsOnTamperedHeader() public {

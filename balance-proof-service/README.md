@@ -69,7 +69,11 @@ audited `@noble/hashes` (for keccak).
 
 ## Window caveat
 
-`BLOCKHASH` only reaches back 256 blocks (~51 min on mainnet). Anchoring at head-100
-leaves ~156 blocks of margin to land the transaction; submit promptly or regenerate.
-To prove further back (up to 8191 blocks) on post-Pectra chains, the contract can be
-adapted to read the EIP-2935 history contract instead of `BLOCKHASH`.
+The contract resolves block hashes via the `BLOCKHASH` opcode (last 256 blocks) and
+the EIP-2935 history contract (last **8191** blocks, ~27 h on mainnet) — so the proof
+target may be up to 8191 blocks old. Anchoring at head-100 (`BLOCKS_AGO`) leaves ample
+margin to land the transaction; submit before the target ages past 8191, or regenerate.
+
+Practical limit: a deep target (older than ~128 blocks) also needs an **archive** RPC,
+because `eth_getProof` requires the historical *state* and pruned full nodes only keep
+~128 recent states. The default `BLOCKS_AGO=100` works on a normal full node.

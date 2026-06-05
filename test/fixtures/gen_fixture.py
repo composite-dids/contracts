@@ -71,6 +71,10 @@ blk = rpc("eth_getBlockByNumber", [hexb, False])
 hdr = header_rlp(blk)
 pf = rpc("eth_getProof", [ADDR, [], hexb])
 
+# A block >256 behind the fork block, to exercise the EIP-2935 (Pectra) path on-chain.
+deep_block = fork_block - 300
+deep = rpc("eth_getBlockByNumber", [hex(deep_block), False])
+
 fixture = {
     "rpc": RPC,
     "address": ADDR,
@@ -83,6 +87,8 @@ fixture = {
     "accountProof": pf["accountProof"],
     "balanceWei": str(int(pf["balance"], 16)),
     "nonce": int(pf["nonce"], 16),
+    "deepBlock": deep_block,
+    "deepBlockHash": deep["hash"],
 }
 
 out = sys.argv[4] if len(sys.argv) > 4 else "test/fixtures/balance_mainnet.json"
