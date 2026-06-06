@@ -12,7 +12,9 @@
   h1 { font-size:22px; margin:0 0 4px; }
   .sub { color:var(--mut); margin:0 0 24px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
+  select { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
   button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.danger { background:#5a2330; }
   button.secondary { background:#222b3d; }
   button.sel { outline:2px solid var(--acc); }
   button:disabled { opacity:.45; cursor:not-allowed; }
@@ -35,7 +37,7 @@
 </head>
 <body>
 <div class="wrap">
-  <nav class="muted"><a href="./index.html">Validator identity</a><a href="./balance.html">Historical balance</a><a href="./reclaim.html"><b>zkTLS identity</b></a></nav>
+  <nav class="muted"><a href="./index.html"><b>★ All-in-one</b></a><a href="./balance.html">Balance</a><a href="./reclaim.html">zkTLS</a></nav>
   <h1>Reclaim zkTLS Identity</h1>
   <p class="sub">Prove you control an off-chain account (GitHub / Google) with a Reclaim zkTLS proof, verified on-chain and bound to your wallet.</p>
 
@@ -66,6 +68,21 @@
     <div class="kv"><span class="k">Proof received for</span><span class="v" id="pKind"></span></div>
     <div class="kv"><span class="k">Handle</span><span class="v" id="pHandle"></span></div>
     <div style="margin-top:14px;"><button id="submit">Submit on-chain</button></div>
+  </div>
+
+  <div class="card" id="badCard">
+    <div class="muted" style="margin-bottom:8px;">🧪 Negative test — send a forged / tampered proof. The contract should <b>reject</b> it (a revert is the correct result).</div>
+    <select id="tamperMode">
+      <option value="forgedEmpty">Forged proof — no signatures</option>
+      <option value="forgedRandom">Forged proof — random identifier + signature</option>
+      <option value="tamperSig">Real proof — flip a signature byte (needs a generated proof)</option>
+      <option value="tamperContext">Real proof — alter the context/email (needs a generated proof)</option>
+    </select>
+    <div class="row" style="margin-top:12px;">
+      <button id="simBad" class="secondary">Simulate rejection (no gas)</button>
+      <button id="sendBad" class="danger">Broadcast failing tx</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0;">Pick a provider above first (it selects the target contract). <b>Simulate</b> uses <code>eth_call</code> and shows the revert reason for free. <b>Broadcast</b> forces a real tx on-chain (forced gas) so you can see the reverted transaction on Etherscan.</p>
   </div>
 
   <div class="card hidden" id="statusCard">
@@ -198,6 +215,65 @@ async function loadStatus() {
   $("sHandle").textContent = h || "—";
   $("statusCard").classList.remove("hidden");
 }
+
+// ---- negative test: forge / tamper a proof and expect a revert ----
+function buildBadProof(mode) {
+  if (!account) throw new Error("Connect your wallet first.");
+  if (!sel) throw new Error("Pick GitHub or Google first — it selects the target contract.");
+  const ctx = '{"contextAddress":"' + account + '","extractedParameters":{"' + PROVIDERS[sel].field + '":"forged"}}';
+
+  if (mode === "forgedEmpty") {
+    return { claimInfo: { provider: "http", parameters: "{}", context: ctx },
+      signedClaim: { claim: { identifier: ethers.ZeroHash, owner: account, timestampS: 0, epoch: 1 }, signatures: [] } };
+  }
+  if (mode === "forgedRandom") {
+    return { claimInfo: { provider: "http", parameters: "{}", context: ctx },
+      signedClaim: { claim: { identifier: ethers.hexlify(ethers.randomBytes(32)), owner: account, timestampS: 1, epoch: 1 },
+        signatures: [ethers.hexlify(ethers.randomBytes(65))] } };
+  }
+  // tamper modes mutate a real, valid proof
+  if (!onchainProof) throw new Error("Generate a real proof first, then tamper it.");
+  const p = structuredClone(onchainProof);
+  if (mode === "tamperSig") {
+    const b = ethers.getBytes(p.signedClaim.signatures[0]);
+    b[40] ^= 0x01; // flip one byte -> recovered signer is no longer a witness
+    p.signedClaim.signatures[0] = ethers.hexlify(b);
+  } else if (mode === "tamperContext") {
+    const c = p.claimInfo.context;
+    // any change to claimInfo breaks identifier == hashClaimInfo(claimInfo)
+    p.claimInfo.context = c.includes("@") ? c.replace("@", "@evil-") : c.slice(0, -1) + "0";
+  }
+  return p;
+}
+
+$("simBad").onclick = async () => {
+  try {
+    const mode = $("tamperMode").value;
+    const bad = buildBadProof(mode);
+    const c = new ethers.Contract(PROVIDERS[sel].contract, ABI, provider);
+    log("Simulating submitProof with a '" + mode + "' proof (eth_call, no gas) …");
+    await c.submitProof.staticCall(bad);
+    append("⚠ Unexpected: the contract ACCEPTED it (no revert).");
+  } catch (e) {
+    append("✓ Rejected by contract: " + (e.reason || e.shortMessage || e.message || e));
+  }
+};
+
+$("sendBad").onclick = async () => {
+  try {
+    if (!(await ensureChain())) return;
+    const mode = $("tamperMode").value;
+    const bad = buildBadProof(mode);
+    const c = new ethers.Contract(PROVIDERS[sel].contract, ABI, signer);
+    log("Broadcasting a failing tx (forced gas so it actually lands) …");
+    const tx = await c.submitProof(bad, { gasLimit: 600000 });
+    append("tx: " + ACTIVE.explorer + "/tx/" + tx.hash);
+    try { await tx.wait(); append("⚠ Unexpected: the tx succeeded."); }
+    catch { append("✓ Reverted on-chain as expected — see the failed tx above."); }
+  } catch (e) {
+    append("✓ Rejected before broadcast: " + (e.reason || e.shortMessage || e.message || e));
+  }
+};
 </script>
 </body>
 </html>

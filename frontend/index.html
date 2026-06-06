@@ -3,22 +3,27 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Beacon Validator Identity</title>
+<title>On-chain Identity — Proof Console</title>
 <style>
   :root { --bg:#0b0e14; --card:#141925; --line:#232a3a; --fg:#e6e9ef; --mut:#8b93a7; --acc:#5b8cff; --ok:#3fb950; --err:#f85149; }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
-  .wrap { max-width:720px; margin:0 auto; padding:32px 20px 80px; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
   h1 { font-size:22px; margin:0 0 4px; }
-  .sub { color:var(--mut); margin:0 0 24px; }
+  .sub { color:var(--mut); margin:0 0 20px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
   label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.04em; }
-  input { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
+  input, select { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
   button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
   button.secondary { background:#222b3d; }
+  button.danger { background:#5a2330; }
+  button.sel { outline:2px solid var(--acc); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   .row > * { flex:1; }
+  .tabs { display:flex; gap:8px; }
+  .tabs button { flex:1; background:#0e1220; border:1px solid var(--line); }
+  .tabs button.active { background:var(--acc); border-color:var(--acc); }
   .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
   .kv:last-child { border-bottom:0; }
   .kv .k { color:var(--mut); }
@@ -30,13 +35,14 @@
   .hidden { display:none; }
   #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
   a { color:var(--acc); }
+  #qr { background:#fff; padding:10px; border-radius:8px; display:inline-block; }
+  h3 { margin:0 0 4px; font-size:16px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <nav class="muted" style="margin-bottom:10px;"><a href="./index.html"><b>Validator identity</b></a> <a href="./balance.html" style="margin-left:14px;">Historical balance</a> <a href="./reclaim.html" style="margin-left:14px;">zkTLS identity</a></nav>
-  <h1>Beacon Validator Identity</h1>
-  <p class="sub">Prove you control an Ethereum validator's withdrawal address — verified on-chain against the beacon validator set (EIP-4788).</p>
+  <h1>On-chain Identity — Proof Console</h1>
+  <p class="sub">Two trustless proofs in one app: historical balance and zkTLS account ownership — on Sepolia.</p>
 
   <div class="card">
     <div class="row">
@@ -45,40 +51,93 @@
     </div>
   </div>
 
-  <div class="card">
-    <label>Proof service URL</label>
-    <input id="svc" value="http://localhost:8080" />
-    <label>Contract address (BeaconIdentityVerifier)</label>
-    <input id="contract" placeholder="0x…" />
-    <label>Validator index</label>
-    <div class="row">
-      <input id="vindex" placeholder="e.g. 123456" inputmode="numeric" style="flex:3;" />
-      <button id="gen" style="flex:1;">Generate proof</button>
-    </div>
+  <div class="card tabs">
+    <button data-tab="balance" class="active">Historical balance</button>
+    <button data-tab="zktls">zkTLS identity</button>
   </div>
 
-  <div class="card hidden" id="proofCard">
-    <div class="kv"><span class="k">Withdrawal address</span><span class="v" id="pAddr"></span></div>
-    <div class="kv"><span class="k">Credentials type</span><span class="v" id="pCreds"></span></div>
-    <div class="kv"><span class="k">Effective balance</span><span class="v" id="pBal"></span></div>
-    <div class="kv"><span class="k">Exited</span><span class="v" id="pExit"></span></div>
-    <div class="kv"><span class="k">Target slot</span><span class="v" id="pSlot"></span></div>
-    <div class="kv"><span class="k">State tree depth</span><span class="v" id="pDepth"></span></div>
-    <div class="kv"><span class="k">Matches your wallet</span><span class="v" id="pMatch"></span></div>
-    <div style="margin-top:14px;" class="row">
-      <button id="bind">Verify — direct tx</button>
-      <button id="sign" class="secondary">Verify — via signature</button>
+  <!-- ============================ BALANCE ============================ -->
+  <section id="tab-balance">
+    <div class="card">
+      <h3>Prove you held ≥ 0.1 ETH ~100 blocks ago</h3>
+      <p class="muted" style="margin:2px 0 8px;">blockhash → header → Merkle-Patricia state proof of your address. No oracle.</p>
+      <label>Proof service URL</label>
+      <input id="b_svc" value="http://localhost:8081" />
+      <label>Contract (HistoricalBalanceVerifier)</label>
+      <input id="b_contract" value="0xAa05125270F803C4d336F12b2426dd54CFaF6FE1" />
+      <p class="muted" style="margin:8px 0;">Proves your connected wallet (<code>msg.sender</code>).</p>
+      <button id="b_gen">Generate proof for my wallet</button>
     </div>
-    <p class="muted" id="pathNote" style="margin:10px 0 0;">
-      <b>Direct</b>: your wallet sends the tx and must equal the withdrawal address.
-      <b>Signature</b>: your wallet signs a message (recoverable to the withdrawal address); a relayer could submit it for you.
-    </p>
-  </div>
+    <div class="card hidden" id="b_proofCard">
+      <div class="kv"><span class="k">Account</span><span class="v" id="b_pAcc"></span></div>
+      <div class="kv"><span class="k">Target block</span><span class="v" id="b_pBlock"></span></div>
+      <div class="kv"><span class="k">Age (blocks)</span><span class="v" id="b_pAge"></span></div>
+      <div class="kv"><span class="k">Balance (per node)</span><span class="v" id="b_pBal"></span></div>
+      <div class="kv"><span class="k">Meets ≥ 0.1 ETH</span><span class="v" id="b_pMeets"></span></div>
+      <div style="margin-top:14px;" class="row">
+        <button id="b_verify" class="secondary">Verify (read-only)</button>
+        <button id="b_record">Prove eligibility</button>
+      </div>
+    </div>
+    <div class="card hidden" id="b_statusCard">
+      <div class="kv"><span class="k">Contract-verified balance</span><span class="v" id="b_sBal"></span></div>
+      <div class="kv"><span class="k">Eligible on-chain</span><span class="v" id="b_sRec"></span></div>
+    </div>
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px;">🧪 Negative test — forged/tampered proof should be <b>rejected</b>.</div>
+      <select id="b_tamperMode">
+        <option value="forgedHeader">Forged — random header (no proof needed)</option>
+        <option value="tamperHeader">Tamper header RLP — flip a byte (needs a proof)</option>
+        <option value="tamperProof">Tamper account proof — flip a byte (needs a proof)</option>
+      </select>
+      <div class="row" style="margin-top:12px;">
+        <button id="b_simBad" class="secondary">Simulate rejection (no gas)</button>
+        <button id="b_sendBad" class="danger">Broadcast failing tx</button>
+      </div>
+    </div>
+  </section>
 
-  <div class="card hidden" id="statusCard">
-    <div class="kv"><span class="k">On-chain status</span><span class="v" id="sStatus"></span></div>
-    <div class="kv"><span class="k">Recorded balance</span><span class="v" id="sBal"></span></div>
-  </div>
+  <!-- ============================ ZKTLS ============================ -->
+  <section id="tab-zktls" class="hidden">
+    <div class="card">
+      <h3>Prove you control a GitHub / Google account (Reclaim zkTLS)</h3>
+      <p class="muted" style="margin:2px 0 8px;">Set <code>R_APP_SECRET</code> in this file first (client-side, testnet only).</p>
+      <div class="row">
+        <button id="r_pickGithub" class="secondary">GitHub username</button>
+        <button id="r_pickGoogle" class="secondary">Google email</button>
+        <button id="r_pickArxiv" class="secondary">arXiv (≥1 paper)</button>
+      </div>
+      <div class="kv" style="margin-top:12px;"><span class="k">Target contract</span><span class="v" id="r_cAddr">—</span></div>
+      <div style="margin-top:12px;"><button id="r_start" disabled>Start verification</button></div>
+    </div>
+    <div class="card hidden" id="r_qrCard">
+      <div class="muted" style="margin-bottom:8px;">Scan or click to complete the Reclaim flow:</div>
+      <div id="qr"></div>
+      <p style="margin:10px 0 0;"><a id="r_reqLink" href="#" target="_blank" rel="noopener">Open Reclaim verification ↗</a></p>
+    </div>
+    <div class="card hidden" id="r_proofCard">
+      <div class="kv"><span class="k">Proof received for</span><span class="v" id="r_pKind"></span></div>
+      <div class="kv"><span class="k">Handle</span><span class="v" id="r_pHandle"></span></div>
+      <div style="margin-top:14px;"><button id="r_submit">Submit on-chain</button></div>
+    </div>
+    <div class="card hidden" id="r_statusCard">
+      <div class="kv"><span class="k">Verified on-chain</span><span class="v" id="r_sVerified"></span></div>
+      <div class="kv"><span class="k">Recorded handle</span><span class="v" id="r_sHandle"></span></div>
+    </div>
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px;">🧪 Negative test — forged/tampered proof should be <b>rejected</b>. Pick a provider above first.</div>
+      <select id="r_tamperMode">
+        <option value="forgedEmpty">Forged — no signatures</option>
+        <option value="forgedRandom">Forged — random identifier + signature</option>
+        <option value="tamperSig">Real proof — flip a signature byte (needs a proof)</option>
+        <option value="tamperContext">Real proof — alter the context (needs a proof)</option>
+      </select>
+      <div class="row" style="margin-top:12px;">
+        <button id="r_simBad" class="secondary">Simulate rejection (no gas)</button>
+        <button id="r_sendBad" class="danger">Broadcast failing tx</button>
+      </div>
+    </div>
+  </section>
 
   <div class="card"><div id="log">Ready.</div></div>
 </div>
@@ -86,173 +145,260 @@
 <script type="module">
 import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.13.4/+esm";
 
-// ---- network config -----------------------------------------------------
-// To migrate to another chain, change ACTIVE and (if needed) add an entry.
-// chainId values are decimal; `hex` is what wallets expect for switching.
+// ===================== shared config =====================
 const NETWORKS = {
   sepolia: { chainId: 11155111, hex: "0xaa36a7", name: "Sepolia", explorer: "https://sepolia.etherscan.io" },
   mainnet: { chainId: 1,        hex: "0x1",      name: "Ethereum", explorer: "https://etherscan.io" },
 };
 const ACTIVE = NETWORKS[(new URLSearchParams(location.search).get("net")) || "sepolia"] || NETWORKS.sepolia;
 
-const ABI = [
-  "function verifyAndBind(uint256 beaconTimestamp, uint40 validatorIndex, bytes32[8] validatorFields, bytes32[] validatorProof, bytes32 beaconStateRoot, bytes32[] stateRootProof)",
-  "function verifyWithSignature(uint256 beaconTimestamp, uint40 validatorIndex, bytes32[8] validatorFields, bytes32[] validatorProof, bytes32 beaconStateRoot, bytes32[] stateRootProof, uint256 nonce, bytes signature)",
-  "function identityMessageHash(address account, uint40 validatorIndex, uint256 nonce) view returns (bytes32)",
-  "function nonces(address) view returns (uint256)",
-  "function isVerified(address) view returns (bool)",
-  "function effectiveBalanceGweiOf(address) view returns (uint64)",
-  "function BEACON_STATE_TREE_DEPTH() view returns (uint256)",
-];
+// Reclaim (zkTLS) config — set R_APP_SECRET locally (client-side, testnet only).
+const R_APP_ID = "0xFe1b1682Fb71e59fE7579e7a10324e8211c3c688";
+const R_APP_SECRET = "0x9931e638687b99dc932264046325befa33d2d0ef43ec5067360a9e5976e1aa38"; // client-side, testnet only
+const R_PROVIDERS = {
+  github: { id: "6d3f6753-7ee6-49ee-a545-62f1b1822ae5", contract: "0x842D4e4B5A531cA42eCF601ced9e606405888704", label: "GitHub username", field: "username" },
+  google: { id: "f9f383fd-32d9-4c54-942f-5e9fda349762", contract: "0x974f84EF3b064c60b4D138043A92685B37BCFD66", label: "Google email", field: "email" },
+  arxiv:  { id: "1b28976b-34a2-423a-ba0c-1ef79436efb2",  contract: "0x4352F52ea5cA41768d16aa5aF7b1D5ad3fA53Ef4", label: "arXiv (≥1 paper)", field: "first_paper_title" },
+};
 
+const ABI_BALANCE = [
+  "function verifyBalanceAt(uint256 targetBlock, bytes headerRLP, address account, bytes[] accountProof) view returns (uint256)",
+  "function proveSelfBalance(uint256 targetBlock, bytes headerRLP, bytes[] accountProof) returns (uint256)",
+  "function isEligible(address) view returns (bool)",
+];
+const ABI_RECLAIM = [
+  "function submitProof(((string provider,string parameters,string context) claimInfo,((bytes32 identifier,address owner,uint32 timestampS,uint32 epoch) claim,bytes[] signatures) signedClaim) proof)",
+  "function isVerified(address) view returns (bool)",
+  "function handleOf(address) view returns (string)",
+];
+const MIN_BALANCE = 100000000000000000n; // 0.1 ETH
+
+// ===================== shared helpers =====================
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $("log").textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2); };
+const append = (m) => { $("log").textContent += "\n" + m; };
+const eth = (wei) => Number(ethers.formatEther(wei)).toFixed(6) + " ETH";
+const txLink = (h) => "tx: " + ACTIVE.explorer + "/tx/" + h;
 
-// Show which chain this UI targets.
 $("netBadge").textContent = ACTIVE.name;
 $("netBadge").classList.add(ACTIVE.chainId === 1 ? "err" : "ok");
-const append = (m) => { $("log").textContent += "\n" + m; };
 
-let provider, signer, account, proof;
+let provider, signer, account;
 
-function contract(readOnly = false) {
-  const addr = $("contract").value.trim();
+function mkContract(addr, abi, readOnly = false) {
   if (!ethers.isAddress(addr)) throw new Error("Enter a valid contract address");
-  return new ethers.Contract(addr, ABI, readOnly ? provider : signer);
+  return new ethers.Contract(addr, abi, readOnly ? provider : signer);
 }
-
 async function ensureChain() {
   const net = await provider.getNetwork();
   if (Number(net.chainId) === ACTIVE.chainId) return true;
-  log(`Wrong network. Switching to ${ACTIVE.name} …`);
   try {
     await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ACTIVE.hex }] });
     provider = new ethers.BrowserProvider(window.ethereum);
     signer = await provider.getSigner();
     return true;
-  } catch (e) {
-    log(`Please switch your wallet to ${ACTIVE.name} (chainId ${ACTIVE.chainId}).`);
-    return false;
-  }
+  } catch { log(`Switch your wallet to ${ACTIVE.name}.`); return false; }
 }
-
 $("connect").onclick = async () => {
   if (!window.ethereum) return log("No injected wallet found (install MetaMask).");
   provider = new ethers.BrowserProvider(window.ethereum);
   await provider.send("eth_requestAccounts", []);
   signer = await provider.getSigner();
   if (!(await ensureChain())) return;
-  account = (await signer.getAddress());
+  account = await signer.getAddress();
   $("acct").textContent = account;
   log("Connected to " + ACTIVE.name + ": " + account);
-  refreshMatch();
+  b_refresh(); r_refreshStart();
 };
 
-$("gen").onclick = async () => {
+// ===================== tabs =====================
+document.querySelectorAll(".tabs button").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b === btn));
+    for (const t of ["balance", "zktls"]) $("tab-" + t).classList.toggle("hidden", t !== btn.dataset.tab);
+  };
+});
+
+// ===================== BALANCE =====================
+let bProof;
+$("b_gen").onclick = async () => {
   try {
-    const idx = $("vindex").value.trim();
-    if (!/^\d+$/.test(idx)) return log("Enter a numeric validator index.");
-    const url = $("svc").value.replace(/\/$/, "") + "/proof/" + idx;
-    log("Requesting proof from " + url + " …");
+    if (!account) return log("Connect your wallet first.");
+    const url = $("b_svc").value.replace(/\/$/, "") + "/balance-proof/" + account;
+    log("Requesting balance proof for " + account + " …");
     const res = await fetch(url);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
-    proof = data;
-
-    $("pAddr").textContent = data.withdrawalAddress;
-    $("pCreds").textContent = "0x0" + data.credsType + (data.credsType === 0 ? " (BLS — no exec addr)" : "");
-    $("pBal").textContent = (data.effectiveBalanceGwei / 1e9).toFixed(4) + " ETH";
-    $("pExit").textContent = data.exited ? "yes" : "no";
-    $("pSlot").textContent = data.targetSlot;
-    $("pDepth").textContent = data.beaconStateTreeDepth;
-    $("proofCard").classList.remove("hidden");
-    refreshMatch();
-    await checkDepth(data.beaconStateTreeDepth);
-    log("Proof ready for validator " + idx + ".");
-  } catch (e) {
-    log("Proof error: " + (e.message || e));
+    bProof = data;
+    const meets = BigInt(data.reportedBalanceWei) >= MIN_BALANCE;
+    $("b_pAcc").textContent = data.address;
+    $("b_pBlock").textContent = data.targetBlock + "  (head " + data.currentBlock + ")";
+    $("b_pAge").textContent = data.age;
+    $("b_pBal").textContent = eth(data.reportedBalanceWei);
+    $("b_pMeets").innerHTML = meets ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
+    $("b_record").disabled = !meets;
+    $("b_proofCard").classList.remove("hidden");
+    log(meets ? "Proof ready. You clear the 0.1 ETH threshold." : "Proof ready, but below 0.1 ETH — proveSelfBalance would revert.");
+  } catch (e) { log("Proof error: " + (e.message || e)); }
+};
+function b_refresh() { if (bProof) $("b_record").disabled = BigInt(bProof.reportedBalanceWei) < MIN_BALANCE; }
+$("b_verify").onclick = async () => {
+  try {
+    const c = mkContract($("b_contract").value.trim(), ABI_BALANCE, true);
+    const bal = await c.verifyBalanceAt(bProof.targetBlock, bProof.headerRLP, bProof.address, bProof.accountProof);
+    $("b_sBal").innerHTML = '<span class="pill ' + (bal >= MIN_BALANCE ? "ok" : "err") + '">' + eth(bal) + "</span>";
+    $("b_sRec").textContent = "—";
+    $("b_statusCard").classList.remove("hidden");
+    log("✓ Contract verified the proof. Balance = " + eth(bal));
+  } catch (e) { log("✗ verify reverted: " + (e.shortMessage || e.message || e)); }
+};
+$("b_record").onclick = async () => {
+  try {
+    if (!(await ensureChain())) return;
+    const c = mkContract($("b_contract").value.trim(), ABI_BALANCE);
+    log("Sending proveSelfBalance …");
+    const tx = await c.proveSelfBalance(bProof.targetBlock, bProof.headerRLP, bProof.accountProof);
+    append(txLink(tx.hash)); await tx.wait(); append("✓ mined");
+    const cr = mkContract($("b_contract").value.trim(), ABI_BALANCE, true);
+    const eligible = await cr.isEligible(bProof.address);
+    const bal = await cr.verifyBalanceAt(bProof.targetBlock, bProof.headerRLP, bProof.address, bProof.accountProof);
+    $("b_sBal").innerHTML = '<span class="pill ok">' + eth(bal) + "</span>";
+    $("b_sRec").innerHTML = eligible ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
+    $("b_statusCard").classList.remove("hidden");
+  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+};
+async function b_buildBad(mode) {
+  if (!account) throw new Error("Connect your wallet first.");
+  if (mode === "forgedHeader") {
+    const head = await provider.getBlockNumber();
+    return { targetBlock: head - 110, headerRLP: ethers.hexlify(ethers.randomBytes(200)), account, accountProof: [] };
   }
-};
-
-function refreshMatch() {
-  if (!proof) return;
-  const matches = account && account.toLowerCase() === proof.withdrawalAddress.toLowerCase();
-  $("pMatch").innerHTML = !account
-    ? '<span class="muted">connect wallet</span>'
-    : matches ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
-  const blockedReason =
-    proof.credsType === 0 ? "validator has no execution withdrawal address"
-    : proof.exited ? "validator has exited"
-    : !matches ? "connect the withdrawal-address wallet to sign"
-    : null;
-  $("bind").disabled = !!blockedReason;
-  $("sign").disabled = !!blockedReason;
-  $("pathNote").dataset.reason = blockedReason || "";
+  if (!bProof) throw new Error("Generate a proof first, then tamper it.");
+  if (mode === "tamperHeader") {
+    const b = ethers.getBytes(bProof.headerRLP); b[50] ^= 0x01;
+    return { targetBlock: bProof.targetBlock, headerRLP: ethers.hexlify(b), account: bProof.address, accountProof: bProof.accountProof };
+  }
+  const ap = bProof.accountProof.slice(); const i = ap.length - 1;
+  const b = ethers.getBytes(ap[i]); b[b.length - 4] ^= 0x01; ap[i] = ethers.hexlify(b);
+  return { targetBlock: bProof.targetBlock, headerRLP: bProof.headerRLP, account: bProof.address, accountProof: ap };
 }
-
-async function checkDepth(depth) {
+$("b_simBad").onclick = async () => {
   try {
-    const onchain = Number(await contract(true).BEACON_STATE_TREE_DEPTH());
-    if (onchain !== depth) {
-      append(`⚠ Contract state-tree depth is ${onchain} but this proof is for ${depth}. ` +
-             `Deploy a contract built for this fork, or the proof will fail.`);
-    }
-  } catch { /* contract addr not set yet — ignore */ }
-}
-
-function callArgs() {
-  return [
-    proof.beaconTimestamp,
-    proof.validatorIndex,
-    proof.validatorFields,
-    proof.validatorProof,
-    proof.beaconStateRoot,
-    proof.stateRootProof,
-  ];
-}
-
-const txLink = (h) => "tx: " + ACTIVE.explorer + "/tx/" + h;
-
-$("bind").onclick = async () => {
+    const a = await b_buildBad($("b_tamperMode").value);
+    const c = mkContract($("b_contract").value.trim(), ABI_BALANCE, true);
+    log("Simulating verifyBalanceAt with a forged/tampered proof (eth_call) …");
+    await c.verifyBalanceAt.staticCall(a.targetBlock, a.headerRLP, a.account, a.accountProof);
+    append("⚠ Unexpected: the contract ACCEPTED it.");
+  } catch (e) { append("✓ Rejected by contract: " + (e.reason || e.shortMessage || e.message || e)); }
+};
+$("b_sendBad").onclick = async () => {
   try {
     if (!(await ensureChain())) return;
-    const c = contract();
-    log("Sending verifyAndBind …");
-    const tx = await c.verifyAndBind(...callArgs());
+    const a = await b_buildBad($("b_tamperMode").value);
+    const c = mkContract($("b_contract").value.trim(), ABI_BALANCE);
+    log("Broadcasting a failing tx (forced gas) …");
+    const tx = await c.proveSelfBalance(a.targetBlock, a.headerRLP, a.accountProof, { gasLimit: 3000000 });
     append(txLink(tx.hash));
-    await tx.wait();
-    append("✓ mined");
-    await loadStatus();
-  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+    try { await tx.wait(); append("⚠ Unexpected: tx succeeded."); }
+    catch { append("✓ Reverted on-chain as expected — see the failed tx above."); }
+  } catch (e) { append("✓ Rejected before broadcast: " + (e.reason || e.shortMessage || e.message || e)); }
 };
 
-$("sign").onclick = async () => {
+// ===================== ZKTLS (Reclaim) =====================
+let rSel, rProof, _Reclaim, _QRCode;
+async function loadReclaim() {
+  if (!_Reclaim) _Reclaim = await import("https://esm.sh/@reclaimprotocol/js-sdk@5.5.0");
+  if (!_QRCode) _QRCode = (await import("https://esm.sh/qrcode@1.5.4")).default;
+}
+function r_pick(kind) {
+  rSel = kind;
+  $("r_pickGithub").classList.toggle("sel", kind === "github");
+  $("r_pickGoogle").classList.toggle("sel", kind === "google");
+  $("r_pickArxiv").classList.toggle("sel", kind === "arxiv");
+  $("r_cAddr").textContent = R_PROVIDERS[kind].contract;
+  if (R_PROVIDERS[kind].id.startsWith("PASTE_")) log("Set the " + kind + " provider ID in index.html (R_PROVIDERS) before starting.");
+  r_refreshStart();
+}
+$("r_pickGithub").onclick = () => r_pick("github");
+$("r_pickGoogle").onclick = () => r_pick("google");
+$("r_pickArxiv").onclick = () => r_pick("arxiv");
+function r_refreshStart() { $("r_start").disabled = !(account && rSel); }
+$("r_start").onclick = async () => {
+  try {
+    if (R_APP_SECRET.startsWith("PASTE_")) return log("Set R_APP_SECRET in index.html first (client-side, testnet only).");
+    await loadReclaim();
+    const p = R_PROVIDERS[rSel];
+    log("Initializing Reclaim request for " + p.label + " …");
+    const req = await _Reclaim.ReclaimProofRequest.init(R_APP_ID, R_APP_SECRET, p.id);
+    req.addContext(account, "Bind " + p.label + " identity to " + account);
+    const url = await req.getRequestUrl();
+    $("r_reqLink").href = url;
+    $("qr").innerHTML = '<img alt="Reclaim QR" width="220" height="220" src="' + (await _QRCode.toDataURL(url, { width: 220, margin: 1 })) + '" />';
+    $("r_qrCard").classList.remove("hidden");
+    log("Scan the QR or open the link, then complete the Reclaim flow…");
+    await req.startSession({
+      onSuccess: (proofs) => {
+        const proof = Array.isArray(proofs) ? proofs[0] : proofs;
+        rProof = _Reclaim.transformForOnchain(proof);
+        let handle = "(received)";
+        try { handle = JSON.parse(rProof.claimInfo.context).extractedParameters[p.field] || handle; } catch {}
+        $("r_pKind").textContent = p.label;
+        $("r_pHandle").textContent = handle;
+        $("r_proofCard").classList.remove("hidden");
+        append("✓ Proof received. Review, then submit on-chain.");
+      },
+      onError: (e) => append("✗ Reclaim error: " + (e?.message || e)),
+    });
+  } catch (e) { log("Start error: " + (e?.message || e)); }
+};
+$("r_submit").onclick = async () => {
   try {
     if (!(await ensureChain())) return;
-    const c = contract();
-    const addr = proof.withdrawalAddress;
-    const nonce = await c.nonces(addr);
-    const digest = await c.identityMessageHash(addr, proof.validatorIndex, nonce);
-    log("Sign this message in your wallet …");
-    const signature = await signer.signMessage(ethers.getBytes(digest));
-    append("signature: " + signature.slice(0, 20) + "…");
-    const tx = await c.verifyWithSignature(...callArgs(), nonce, signature);
-    append(txLink(tx.hash));
-    await tx.wait();
-    append("✓ mined");
-    await loadStatus();
-  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+    const c = mkContract(R_PROVIDERS[rSel].contract, ABI_RECLAIM);
+    log("Submitting proof on-chain …");
+    const tx = await c.submitProof(rProof);
+    append(txLink(tx.hash)); await tx.wait(); append("✓ mined");
+    const cr = mkContract(R_PROVIDERS[rSel].contract, ABI_RECLAIM, true);
+    $("r_sVerified").innerHTML = (await cr.isVerified(account)) ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
+    $("r_sHandle").textContent = (await cr.handleOf(account)) || "—";
+    $("r_statusCard").classList.remove("hidden");
+  } catch (e) { append("✗ " + (e?.shortMessage || e?.message || e)); }
 };
-
-async function loadStatus() {
-  const c = contract(true);
-  const addr = proof.withdrawalAddress;
-  const verified = await c.isVerified(addr);
-  const bal = await c.effectiveBalanceGweiOf(addr);
-  $("sStatus").innerHTML = verified ? '<span class="pill ok">verified</span>' : '<span class="pill err">not verified</span>';
-  $("sBal").textContent = (Number(bal) / 1e9).toFixed(4) + " ETH";
-  $("statusCard").classList.remove("hidden");
+function r_buildBad(mode) {
+  if (!account) throw new Error("Connect your wallet first.");
+  if (!rSel) throw new Error("Pick GitHub or Google first.");
+  const ctx = '{"contextAddress":"' + account + '","extractedParameters":{"' + R_PROVIDERS[rSel].field + '":"forged"}}';
+  if (mode === "forgedEmpty")
+    return { claimInfo: { provider: "http", parameters: "{}", context: ctx }, signedClaim: { claim: { identifier: ethers.ZeroHash, owner: account, timestampS: 0, epoch: 1 }, signatures: [] } };
+  if (mode === "forgedRandom")
+    return { claimInfo: { provider: "http", parameters: "{}", context: ctx }, signedClaim: { claim: { identifier: ethers.hexlify(ethers.randomBytes(32)), owner: account, timestampS: 1, epoch: 1 }, signatures: [ethers.hexlify(ethers.randomBytes(65))] } };
+  if (!rProof) throw new Error("Generate a real proof first, then tamper it.");
+  const p = structuredClone(rProof);
+  if (mode === "tamperSig") { const b = ethers.getBytes(p.signedClaim.signatures[0]); b[40] ^= 0x01; p.signedClaim.signatures[0] = ethers.hexlify(b); }
+  else { const c = p.claimInfo.context; p.claimInfo.context = c.includes("@") ? c.replace("@", "@evil-") : c.slice(0, -1) + "0"; }
+  return p;
 }
+$("r_simBad").onclick = async () => {
+  try {
+    const bad = r_buildBad($("r_tamperMode").value);
+    const c = mkContract(R_PROVIDERS[rSel].contract, ABI_RECLAIM, true);
+    log("Simulating submitProof with a forged/tampered proof (eth_call) …");
+    await c.submitProof.staticCall(bad);
+    append("⚠ Unexpected: the contract ACCEPTED it.");
+  } catch (e) { append("✓ Rejected by contract: " + (e.reason || e.shortMessage || e.message || e)); }
+};
+$("r_sendBad").onclick = async () => {
+  try {
+    if (!(await ensureChain())) return;
+    const bad = r_buildBad($("r_tamperMode").value);
+    const c = mkContract(R_PROVIDERS[rSel].contract, ABI_RECLAIM);
+    log("Broadcasting a failing tx (forced gas) …");
+    const tx = await c.submitProof(bad, { gasLimit: 600000 });
+    append(txLink(tx.hash));
+    try { await tx.wait(); append("⚠ Unexpected: tx succeeded."); }
+    catch { append("✓ Reverted on-chain as expected — see the failed tx above."); }
+  } catch (e) { append("✓ Rejected before broadcast: " + (e.reason || e.shortMessage || e.message || e)); }
+};
 </script>
 </body>
 </html>

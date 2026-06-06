@@ -9,6 +9,11 @@ scripts/demo-local.sh
 ```
 Follow the instruction locally, can use any signals provided in the following.
 
+**Unified frontend:** `frontend/index.html` is a single page with tabs for both
+proofs (historical balance, zkTLS identity) sharing one wallet connection, network
+guard, and log — plus the negative-test panels. The standalone pages
+(`balance.html`, `reclaim.html`) still work and are linked from it.
+
 ## Deploying (Sepolia)
 
 `scripts/deploy.sh` deploys the whole suite in one run — `HistoricalBalanceVerifier`,
@@ -22,53 +27,7 @@ scripts/deploy.sh 256 1          # MIN_AGE=256, MIN_BALANCE=1 ETH
 
 Migrating networks = change `RPC_URL` + `RECLAIM_VERIFIER` at the top of the script.
 
-## 1. Proof of validator identity
-
-Prove that you control an Ethereum validator's **withdrawal address**, verified
-on-chain against the beacon-chain validator set via EIP-4788.
-
-- **`beaconverify.sol`** — `BeaconStakeVerifier`: low-level SSZ proof that a
-  validator exists in a recent beacon state and recovers its withdrawal address +
-  effective balance. Fork depth is a constructor parameter (Deneb = 5, Electra = 6).
-- **`BeaconIdentityVerifier.sol`** — binds that proof to a caller-controlled address
-  so it actually proves *identity*, two ways:
-  - `verifyAndBind(…)` — requires `msg.sender == withdrawalAddr` (simplest).
-  - `verifyWithSignature(…, nonce, sig)` — the withdrawal address signs a
-    domain-separated message; anyone (e.g. a relayer) may submit it.
-
-  It stores only a boolean signal (`isVerified`) plus the effective balance, and
-  enforces one-validator-one-identity (`boundIdentityOf`).
-- **`proof-service/`** — Node service that builds the SSZ proofs from a beacon node.
-  See [proof-service/README.md](proof-service/README.md).
-- **`frontend/index.html`** — zero-build UI (ethers via CDN): connect wallet, enter
-  a validator index, fetch a proof, and submit either path. Just open the file (or
-  serve it) — set the proof-service URL and the deployed contract address.
-
-### End-to-end (Sepolia by default)
-
-1. Deploy `BeaconIdentityVerifier` **on Sepolia** with the state-tree depth for the
-   live fork (**6** for Electra — Sepolia and mainnet are both on Electra). The
-   proof service reports the right value.
-2. Run the proof service against your **Sepolia** beacon node (`NETWORK=sepolia`,
-   the default).
-3. Open the frontend, connect the wallet that owns the validator's withdrawal
-   address (it will prompt to switch to Sepolia), enter the validator index,
-   generate the proof, and verify.
-
-**Migrating networks** is deliberately a one-line change in each piece:
-- proof service: `NETWORK=mainnet` (+ a mainnet `BEACON_URL`).
-- frontend: change `ACTIVE` in `index.html` (or load `index.html?net=mainnet`).
-- contract: redeploy on the target chain. The EIP-4788 beacon-roots address is
-  identical on every chain, and the state-tree depth (6) is the same on Sepolia and
-  mainnet today, so no Solidity changes are needed.
-
-### Why the binding matters
-
-`proveValidator` alone proves "validator N exists and its withdrawal address is X" —
-anyone can submit anyone's proof. Binding to `msg.sender`/signature proves the
-submitter *controls* X, turning a public fact into an identity claim.
-
-## 2. Proof of caller's historical balance
+## 1. Proof of caller's historical balance
 
 Prove on-chain that **the caller** held at least **0.1 ETH** ~100 blocks ago — no
 oracle, no trusted party. The EVM can't read historical balances directly, but it can
@@ -112,7 +71,7 @@ proven address) all revert.
 > the tests above, but it has **not had a formal audit** — review before trusting it
 > with real value.
 
-## 3. zkTLS identity (Reclaim)
+## 2. zkTLS identity (Reclaim)
 
 Prove you control an off-chain account (GitHub, Google) via a **Reclaim zkTLS** proof,
 verified on-chain and bound to your wallet. The Reclaim verifier is already deployed on
@@ -123,10 +82,15 @@ Sepolia (`0xAe94FB09711e1c6B057853a515483792d8e474d0`), so nothing extra to depl
   trust anchor), then adds **provider binding** (optional `providerHash`), **user binding**
   (`contextAddress == msg.sender`, stops front-running), and a **sybil nullifier**. Stores
   `isVerified` + the extracted `handleOf`.
-- **`GithubIdentity.sol`** / **`GoogleIdentity.sol`** — thin subclasses fixing the
-  extracted field (`username` / `email`). Deployed on Sepolia:
+- **`GithubIdentity.sol`** / **`GoogleIdentity.sol`** / **`ArxivIdentity.sol`** — thin
+  subclasses fixing the extracted field. `ArxivIdentity` additionally proves **≥ 1
+  paper**: the provider scrapes your login-gated "articles owned" page and captures a
+  paper id (so no proof exists for a 0-paper account), and the contract requires that
+  capture to be non-empty (or, with `minPapers > 1`, parses a numeric `paperCount`).
+  Deployed on Sepolia:
   - GitHub  `0x842D4e4B5A531cA42eCF601ced9e606405888704`
   - Google  `0x974f84EF3b064c60b4D138043A92685B37BCFD66`
+  - arXiv   `0x4352F52ea5cA41768d16aa5aF7b1D5ad3fA53Ef4` (≥ 1 paper; field `first_paper_title`)
 - **`frontend/reclaim.html`** — zero-build UI using `@reclaimprotocol/js-sdk` (via CDN):
   connect wallet → pick GitHub/Google → run the Reclaim flow (QR/link) with the wallet set
   as the context address → submit the proof on-chain. Set `APP_SECRET` in the file first

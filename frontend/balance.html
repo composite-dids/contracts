@@ -14,8 +14,10 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
   label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.04em; }
   input { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
+  select { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
   button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
   button.secondary { background:#222b3d; }
+  button.danger { background:#5a2330; }
   button:disabled { opacity:.45; cursor:not-allowed; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   .row > * { flex:1; }
@@ -35,7 +37,7 @@
 </head>
 <body>
 <div class="wrap">
-  <nav class="muted"><a href="./index.html">Validator identity</a><a href="./balance.html"><b>Historical balance</b></a><a href="./reclaim.html">zkTLS identity</a></nav>
+  <nav class="muted"><a href="./index.html"><b>★ All-in-one</b></a><a href="./balance.html">Balance</a><a href="./reclaim.html">zkTLS</a></nav>
   <h1>Historical Balance Proof</h1>
   <p class="sub">Prove on-chain that <b>you</b> (the caller) held at least <b>0.1 ETH</b> ~100 blocks ago — verified from the block hash and a Merkle-Patricia state proof. No oracle.</p>
 
@@ -71,6 +73,20 @@
       trustlessly-verified balance. <b>Prove eligibility</b> sends a tx (<code>proveSelfBalance</code>) that
       requires the balance ≥ 0.1 ETH and marks your address eligible.
     </p>
+  </div>
+
+  <div class="card" id="badCard">
+    <div class="muted" style="margin-bottom:8px;">🧪 Negative test — send a forged / tampered proof. The contract should <b>reject</b> it (a revert is the correct result).</div>
+    <select id="tamperMode">
+      <option value="forgedHeader">Forged — random header (no proof needed)</option>
+      <option value="tamperHeader">Tamper header RLP — flip a byte (needs a generated proof)</option>
+      <option value="tamperProof">Tamper account proof — flip a byte (needs a generated proof)</option>
+    </select>
+    <div class="row" style="margin-top:12px;">
+      <button id="simBad" class="secondary">Simulate rejection (no gas)</button>
+      <button id="sendBad" class="danger">Broadcast failing tx</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0;">A tampered header fails <code>keccak == blockhash</code> ("header != blockhash"); a tampered proof node fails the Merkle-Patricia walk ("account proof failed"). <b>Simulate</b> is a free <code>eth_call</code>; <b>Broadcast</b> forces a real reverted tx (<code>proveSelfBalance</code>) you can see on Etherscan.</p>
   </div>
 
   <div class="card hidden" id="statusCard">
@@ -207,6 +223,57 @@ async function loadStatus() {
   $("sRec").innerHTML = eligible ? '<span class="pill ok">yes</span>' : '<span class="pill err">no</span>';
   $("statusCard").classList.remove("hidden");
 }
+
+// ---- negative test: forge / tamper a proof and expect a revert ----
+async function buildBad(mode) {
+  if (!account) throw new Error("Connect your wallet first.");
+  if (mode === "forgedHeader") {
+    // Valid recent target (so blockhash exists + window passes), but a random header
+    // -> keccak(header) != blockhash(target) -> "header != blockhash".
+    const head = await provider.getBlockNumber();
+    return { targetBlock: head - 110, headerRLP: ethers.hexlify(ethers.randomBytes(200)), account, accountProof: [] };
+  }
+  if (!proof) throw new Error("Generate a proof first, then tamper it.");
+  if (mode === "tamperHeader") {
+    const b = ethers.getBytes(proof.headerRLP); b[50] ^= 0x01; // any change breaks the keccak match
+    return { targetBlock: proof.targetBlock, headerRLP: ethers.hexlify(b), account: proof.address, accountProof: proof.accountProof };
+  }
+  if (mode === "tamperProof") {
+    const ap = proof.accountProof.slice();
+    const i = ap.length - 1;
+    const b = ethers.getBytes(ap[i]); b[b.length - 4] ^= 0x01; ap[i] = ethers.hexlify(b); // node no longer hashes to its parent's ref
+    return { targetBlock: proof.targetBlock, headerRLP: proof.headerRLP, account: proof.address, accountProof: ap };
+  }
+}
+
+$("simBad").onclick = async () => {
+  try {
+    const mode = $("tamperMode").value;
+    const a = await buildBad(mode);
+    const c = contract(true);
+    log("Simulating verifyBalanceAt with a '" + mode + "' proof (eth_call, no gas) …");
+    await c.verifyBalanceAt.staticCall(a.targetBlock, a.headerRLP, a.account, a.accountProof);
+    append("⚠ Unexpected: the contract ACCEPTED it (no revert).");
+  } catch (e) {
+    append("✓ Rejected by contract: " + (e.reason || e.shortMessage || e.message || e));
+  }
+};
+
+$("sendBad").onclick = async () => {
+  try {
+    if (!(await ensureChain())) return;
+    const mode = $("tamperMode").value;
+    const a = await buildBad(mode);
+    const c = contract();
+    log("Broadcasting a failing tx (forced gas so it actually lands) …");
+    const tx = await c.proveSelfBalance(a.targetBlock, a.headerRLP, a.accountProof, { gasLimit: 3000000 });
+    append("tx: " + ACTIVE.explorer + "/tx/" + tx.hash);
+    try { await tx.wait(); append("⚠ Unexpected: the tx succeeded."); }
+    catch { append("✓ Reverted on-chain as expected — see the failed tx above."); }
+  } catch (e) {
+    append("✓ Rejected before broadcast: " + (e.reason || e.shortMessage || e.message || e));
+  }
+};
 </script>
 </body>
 </html>
