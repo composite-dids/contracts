@@ -1,0 +1,19 @@
+{
+  "name": "did-register-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Client library + CLI for DIDRegistry: aggregate identity signals and build the (signalBitmap, newRoot, insertionPath) registration tuple.",
+  "bin": {
+    "did-register": "cli.js"
+  },
+  "scripts": {
+    "prepare-demo": "node cli.js prepare"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ethers": "^6.13.4"
+  }
+}

@@ -2,6 +2,13 @@
 
 On-chain verification of various types of identity.
 
+## Registration (local only for now!)
+Just run 
+```
+scripts/demo-local.sh
+```
+Follow the instruction locally, can use any signals provided in the following.
+
 ## Deploying (Sepolia)
 
 `scripts/deploy.sh` deploys the whole suite in one run — `HistoricalBalanceVerifier`,
