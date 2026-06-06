@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Client library + CLI for DIDRegistry: aggregate identity signals and build the (signalBitmap, newRoot, insertionPath) registration tuple.",
+  "description": "Client library + CLI for DIDRegistry: inspect the DNF mechanism, build per-signal Sparse Merkle Tree insert proofs, and register.",
   "bin": {
     "did-register": "cli.js"
   },
   "scripts": {
-    "prepare-demo": "node cli.js prepare"
+    "prepare-demo": "node cli.js prepare",
+    "backend": "node backend.js",
+    "selftest": "node selftest.js"
   },
   "engines": {
     "node": ">=18"

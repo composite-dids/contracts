@@ -1,7 +1,7 @@
-// Offline self-test: confirms the JS incremental tree matches DIDRegistry's hashing.
+// Offline self-test: confirms the JS Sparse Merkle Tree matches DIDRegistry's hashing.
 // Run: node selftest.js
 import { ethers } from "ethers";
-import { IncrementalMerkleTree, hashPair, ZERO } from "./incremental-merkle.js";
+import { SparseMerkleTree, leafHash, hashPair, ZERO } from "./sparse-merkle.js";
 
 let failures = 0;
 const eq = (a, b, msg) => {
@@ -10,33 +10,41 @@ const eq = (a, b, msg) => {
   if (!ok) { failures++; console.log(`        got ${a}\n        exp ${b}`); }
 };
 
-// 1. Empty-tree root for depth 8 equals zeros[8] = repeated keccak of zero.
-const DEPTH = 8;
+const DEPTH = 16;
+
+// 1. Empty-tree root for depth D equals zeros[D] = repeated keccak of the zero leaf.
 let z = ZERO;
 for (let i = 0; i < DEPTH; i++) z = hashPair(z, z);
-const t = new IncrementalMerkleTree(DEPTH);
+const t = new SparseMerkleTree(DEPTH);
 eq(t.root, z, "empty-tree root == zeros[depth]");
 
-// 2. previewInsert then insert are consistent, and the root advances deterministically.
-const leafA = ethers.keccak256(ethers.toUtf8Bytes("alice"));
-const prev = t.previewInsert(leafA);
-const idx = t.insert(leafA);
-eq(idx, 0, "first leaf index == 0");
-eq(t.root, prev.newRoot, "insert root == previewInsert newRoot");
+// 2. preview then insert are consistent (the root the contract would commit to).
+const keyA = ethers.keccak256(ethers.toUtf8Bytes("validator:alice"));
+const prevA = t.preview(keyA);
+const rootA = t.insert(keyA);
+eq(t.root, prevA.newRoot, "insert root == preview newRoot");
+eq(rootA, prevA.newRoot, "insert return == preview newRoot");
 
-// 3. A second insert advances the frontier; preview matches commit.
-const leafB = ethers.keccak256(ethers.toUtf8Bytes("bob"));
-const prevB = t.previewInsert(leafB);
-t.insert(leafB);
-eq(t.root, prevB.newRoot, "second insert root == preview");
-
-// 4. Membership proof of leaf 0 verifies against the current root.
-const mp = t.membershipProof(0);
-let node = mp.leaf;
-for (let i = 0; i < mp.path.length; i++) {
-  node = mp.pathIndices[i] ? hashPair(mp.path[i], node) : hashPair(node, mp.path[i]);
+// 3. A non-membership fold of the EMPTY leaf along the proof reproduces the PRE-insert
+//    root (this is exactly the contract's duplicate check).
+const t2 = new SparseMerkleTree(DEPTH);
+const before = t2.root;
+const keyB = ethers.keccak256(ethers.toUtf8Bytes("github:bob"));
+const prevB = t2.preview(keyB);
+let emptyNode = ZERO, filledNode = leafHash(keyB);
+let idx = t2.leafIndex(keyB);
+for (let i = 0; i < DEPTH; i++) {
+  const sib = prevB.siblings[i];
+  if ((idx & 1n) === 0n) { emptyNode = hashPair(emptyNode, sib); filledNode = hashPair(filledNode, sib); }
+  else { emptyNode = hashPair(sib, emptyNode); filledNode = hashPair(sib, filledNode); }
+  idx >>= 1n;
 }
-eq(node, t.root, "membership proof of leaf 0 reconstructs root");
+eq(emptyNode, before, "empty-leaf fold == current root (non-membership)");
+eq(filledNode, prevB.newRoot, "filled-leaf fold == newRoot");
+
+// 4. has() reflects insertion (duplicate detection).
+eq(t.has(keyA), true, "has(key) true after insert");
+eq(t.has(keyB), false, "has(other key) false");
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

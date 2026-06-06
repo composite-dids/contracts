@@ -4,71 +4,93 @@ pragma solidity ^0.8.20;
 import "./SoulboundToken.sol";
 
 /// @title DIDRegistry
-/// @notice Decentralised-identity registration with built-in de-duplication.
+/// @notice Composite decentralised-identity registration with a configurable boolean
+///         **mechanism** over `n` identity signals, and per-signal **Sparse Merkle Tree**
+///         de-duplication.
 ///
-///         A user "registers" by aggregating one or more identity *signals* that
-///         already live in other verifier contracts (e.g. `BeaconIdentityVerifier`
-///         and `HistoricalBalanceVerifier`). This contract:
+///         === Signals & witnesses ===
+///         A signal is an external verifier exposing
+///             `identityWitness(address account) view returns (bytes32)`
+///         which returns a unique, account-independent *witness* for whatever the account
+///         proved (a validator index, a GitHub username, an email, an arXiv id, …) or 0 if
+///         the account has not proven that identity. The default integrated set is:
 ///
-///           1. confirms the signals on-chain by calling those verifier contracts,
-///           2. de-duplicates so the *same* proof can register only once, and
-///           3. issues one non-transferable credential (SBT) per identity.
+///           signal 0  validator   — BeaconIdentityVerifier
+///           signal 1  GitHub       — GithubIdentity   (Reclaim zkTLS)
+///           signal 2  Google/gmail — GoogleIdentity   (Reclaim zkTLS)
+///           signal 3  arXiv        — ArxivIdentity    (Reclaim zkTLS)
 ///
-///         === The (x, r', π) registration scheme ===
-///         De-duplication is enforced with an append-only (incremental) Merkle tree
-///         of identity commitments, plus a `used` set. To register, the caller submits:
+///         === The mechanism (negation-free DNF) ===
+///         Eligibility is a disjunction (OR) of conjunctive *terms*, each term a bitmap of
+///         signals that must ALL hold (AND). This is a negation-free DNF, e.g.:
 ///
-///           x   = the identity commitment (a deterministic hash of their verified
-///                 signals — see `previewCommitment`); the new leaf to append.
-///           r'  = `newRoot`, the Merkle root the tree should have *after* x is appended.
-///           π   = `insertionPath`, the sibling hashes along x's path.
+///           terms = [0b1111]                 => validator AND github AND gmail AND arxiv
+///           terms = [0b0011, 0b1100]         => (validator AND github) OR (gmail AND arxiv)
 ///
-///         The current root `r` (`root()`) is public and known. The contract checks,
-///         against `r`, that (a) the next free leaf is currently empty and (b) inserting
-///         x along π yields exactly r'. Both checks are bound by Merkle collision
-///         resistance, so a valid (x, r', π) is the *unique* honest append. The new root
-///         r' is committed and remembered (`isKnownRoot`) so later membership proofs of
-///         x against any historical root remain verifiable.
+///         To register, the caller names ONE term they satisfy and supplies, for every
+///         signal in that term, an insertion proof for that signal's tree. The default
+///         mechanism is a single all-AND term over every configured signal.
 ///
-///         Because the same verified signal-set always hashes to the same x, replaying
-///         "exactly the same proof" hits the `used` set and is rejected.
+///         === Per-signal Sparse Merkle Tree (de-duplication) ===
+///         Each signal owns a fixed-depth Sparse Merkle Tree keyed by the witness. The
+///         contract stores ONLY the current root per signal. A leaf's position is the low
+///         `TREE_DEPTH` bits of its key, so the *same* witness always maps to the same
+///         leaf. To insert witness `w` into signal `s`'s tree the caller submits:
 ///
-///         === Signals & room for more ===
-///         Up to 4 signal slots are supported. Slots 0 and 1 are wired to the two
-///         existing verifiers at deploy time. Slots 2 and 3 are reserved for the third
-///         and fourth proofs and default to the empty source `address(0)` — treated as
-///         the `0x0000` placeholder until the owner wires them up via `setSignalSource`.
+///           r'  = `newRoot`  — the tree's root after the leaf for `w` is filled.
+///           π   = `siblings` — the sibling hashes along the leaf's path (length TREE_DEPTH).
 ///
-///         === Account uniqueness (one witness = one account) ===
-///         Every signal binds an underlying *witness* (a validator index, a balance
-///         account, a zkTLS nullifier, …) to exactly one account — and each source
-///         verifier enforces that itself (e.g. BeaconIdentityVerifier.boundIdentityOf,
-///         Reclaim's usedNullifier). This registry relies on that: it only ever reads
-///         the signals of `msg.sender`, so a registration can only aggregate signals
-///         that all belong to the *same* account. It cannot combine proofs from two
-///         different accounts, and the witness's global uniqueness is inherited from
-///         the source contract. Any signal added in slot 2/3 MUST provide the same
-///         one-witness-one-account guarantee for this property to hold.
+///         The contract folds π twice along the key-derived path: once from the EMPTY leaf
+///         (must equal the current root `signalRoot[s]`, proving the leaf is empty — i.e.
+///         `w` is NOT already registered — and π is the genuine cofactor) and once from the
+///         filled leaf (must equal `r'`). Both are bound by Merkle collision resistance, so
+///         a valid (r', π) is the unique honest insert and re-registering the same witness
+///         fails the empty-leaf check. The key (witness) is read on-chain from the verifier,
+///         never taken from the caller.
+///
+///         === Account uniqueness ===
+///         The registry reads each verifier for `msg.sender` only, so a registration
+///         aggregates witnesses that all belong to the same account. Because the dedup key
+///         is the underlying witness (not the wallet), the same external account cannot be
+///         registered from two different wallets.
 contract DIDRegistry is SoulboundToken {
     // -----------------------------------------------------------------
-    // Signal sources
+    // Signals (each a witness-exposing verifier) & mechanism
     // -----------------------------------------------------------------
 
-    /// @dev A signal source is an external verifier exposing a
-    ///      `someAccessor(address) view returns (bool)`. We store the address and the
-    ///      4-byte selector so heterogeneous verifiers (e.g. `isVerified` vs
-    ///      `isEligible`) can be queried uniformly.
     struct SignalSource {
-        address verifier;
-        bytes4 selector;
+        address verifier;       // exposes identityWitness(address) (or a custom selector)
+        bytes4 witnessSelector; // selector returning bytes32 witness for an account
     }
 
-    uint8 public constant MAX_SIGNALS = 4;
-    SignalSource[MAX_SIGNALS] public signals;
+    /// @dev Mechanism terms are uint8 bitmaps, so at most 8 signals are supported.
+    uint8 public constant MAX_SIGNALS = 8;
+
+    SignalSource[] public signals;   // length == numSignals
+    bytes32[] public signalRoot;     // per-signal Sparse Merkle Tree root
+    uint8[] public terms;            // DNF: eligibility == OR of these AND-term bitmaps
 
     address public owner;
 
-    event SignalSourceSet(uint8 indexed slot, address verifier, bytes4 selector);
+    // -----------------------------------------------------------------
+    // Sparse Merkle Tree machinery (shared depth across signals)
+    // -----------------------------------------------------------------
+
+    bytes32 public constant DOMAIN = keccak256("DIDRegistry.v2");
+    uint256 public immutable TREE_DEPTH;
+
+    /// @dev Precomputed empty-subtree roots: zeros[i] = root of an empty subtree of
+    ///      height i (zeros[0] is the empty-leaf value, 0). Clients building π need these.
+    bytes32[] internal _zeros;
+
+    // -----------------------------------------------------------------
+    // Events
+    // -----------------------------------------------------------------
+
+    event Registered(address indexed account, uint8 indexed termIndex, uint8 termMask, uint256 tokenId);
+    event SignalInserted(uint8 indexed signal, bytes32 indexed key, bytes32 newRoot);
+    event SignalSourceSet(uint8 indexed slot, address verifier, bytes4 witnessSelector);
+    event MechanismSet(uint8[] terms);
     event OwnershipTransferred(address indexed from, address indexed to);
 
     modifier onlyOwner() {
@@ -77,89 +99,75 @@ contract DIDRegistry is SoulboundToken {
     }
 
     // -----------------------------------------------------------------
-    // Incremental Merkle tree (de-duplication accumulator)
-    // -----------------------------------------------------------------
-
-    /// @dev Domain tag mixed into every commitment so leaves can't be replayed across
-    ///      chains or deployments.
-    bytes32 public constant DOMAIN = keccak256("DIDRegistry.v1");
-
-    uint256 public immutable TREE_DEPTH;
-    /// @notice Current Merkle root `r` (public & known to clients building π).
-    bytes32 public root;
-    /// @notice Index the next appended leaf will occupy.
-    uint256 public nextIndex;
-
-    /// @dev Precomputed roots of all-zero subtrees: zeros[i] = root of an empty
-    ///      subtree of height i. zeros[0] is the empty-leaf value.
-    bytes32[] internal _zeros;
-
-    /// @notice Every root the tree has ever had (including the empty-tree root) is
-    ///         "known", so membership proofs against historical roots stay valid.
-    mapping(bytes32 => bool) public isKnownRoot;
-
-    /// @notice Identity commitments that have already registered (de-dup set).
-    mapping(bytes32 => bool) public usedCommitment;
-
-    /// @notice The credential id minted for a given commitment (0 = not registered).
-    mapping(bytes32 => uint256) public tokenOfCommitment;
-
-    /// @notice The union of every signal bitmap an account has ever registered.
-    mapping(address => uint8) public signalsOf;
-
-    event Registered(
-        address indexed account,
-        bytes32 indexed commitment,
-        uint256 leafIndex,
-        uint8 signalBitmap,
-        bytes32 newRoot,
-        uint256 tokenId
-    );
-
-    // -----------------------------------------------------------------
     // Construction
     // -----------------------------------------------------------------
 
-    /// @param treeDepth        Merkle tree depth; capacity is 2**treeDepth identities.
-    /// @param initialVerifiers Up to MAX_SIGNALS source addresses. Use `address(0)`
-    ///                         for a reserved/unused slot (the `0x0000` placeholder).
-    /// @param initialSelectors The accessor selector for each source, e.g.
-    ///                         `bytes4(keccak256("isVerified(address)"))`.
+    /// @param treeDepth         SMT depth for every signal; capacity is 2**treeDepth leaves.
+    /// @param verifiers         Signal verifier addresses (length == n, 1..MAX_SIGNALS).
+    /// @param witnessSelectors  Per-signal witness selector (e.g.
+    ///                          bytes4(keccak256("identityWitness(address)"))).
+    /// @param initialTerms      DNF term bitmaps. Each must be non-zero and reference only
+    ///                          configured signals. Pass a single (2**n - 1) term for all-AND.
     constructor(
         uint256 treeDepth,
-        address[MAX_SIGNALS] memory initialVerifiers,
-        bytes4[MAX_SIGNALS] memory initialSelectors
+        address[] memory verifiers,
+        bytes4[] memory witnessSelectors,
+        uint8[] memory initialTerms
     ) SoulboundToken("Decentralised Identity Credential", "DID") {
-        require(treeDepth >= 1 && treeDepth <= 32, "bad tree depth");
+        require(treeDepth >= 1 && treeDepth <= 160, "bad tree depth");
+        uint256 n = verifiers.length;
+        require(n >= 1 && n <= MAX_SIGNALS, "bad signal count");
+        require(witnessSelectors.length == n, "selector length");
         TREE_DEPTH = treeDepth;
 
-        // Precompute zero subtree roots and the empty-tree root.
+        // Precompute zero-subtree roots and the empty-tree root.
         _zeros.push(bytes32(0)); // zeros[0] = empty leaf
         for (uint256 i = 0; i < treeDepth; i++) {
             _zeros.push(_hashPair(_zeros[i], _zeros[i]));
         }
-        root = _zeros[treeDepth];
-        isKnownRoot[root] = true;
+        bytes32 emptyRoot = _zeros[treeDepth];
+
+        for (uint256 s = 0; s < n; s++) {
+            require(verifiers[s] != address(0), "zero verifier");
+            signals.push(SignalSource(verifiers[s], witnessSelectors[s]));
+            signalRoot.push(emptyRoot);
+            emit SignalSourceSet(uint8(s), verifiers[s], witnessSelectors[s]);
+        }
+
+        _setMechanism(initialTerms, n);
 
         owner = msg.sender;
         emit OwnershipTransferred(address(0), msg.sender);
-
-        for (uint8 s = 0; s < MAX_SIGNALS; s++) {
-            if (initialVerifiers[s] != address(0)) {
-                signals[s] = SignalSource(initialVerifiers[s], initialSelectors[s]);
-                emit SignalSourceSet(s, initialVerifiers[s], initialSelectors[s]);
-            }
-        }
     }
 
     // -----------------------------------------------------------------
-    // Admin: wire up additional signals (slots 2 & 3 reserved for proof 3 & 4)
+    // Admin
     // -----------------------------------------------------------------
 
-    function setSignalSource(uint8 slot, address verifier, bytes4 selector) external onlyOwner {
-        require(slot < MAX_SIGNALS, "bad slot");
-        signals[slot] = SignalSource(verifier, selector);
-        emit SignalSourceSet(slot, verifier, selector);
+    /// @notice Replace the eligibility mechanism (DNF term bitmaps).
+    function setMechanism(uint8[] calldata newTerms) external onlyOwner {
+        _setMechanism(newTerms, signals.length);
+    }
+
+    function _setMechanism(uint8[] memory newTerms, uint256 n) internal {
+        require(newTerms.length >= 1, "no terms");
+        uint8 full = n == 8 ? 0xff : uint8((uint256(1) << n) - 1);
+        delete terms;
+        for (uint256 i = 0; i < newTerms.length; i++) {
+            uint8 t = newTerms[i];
+            require(t != 0, "empty term");
+            require((t & ~full) == 0, "term references missing signal");
+            terms.push(t);
+        }
+        emit MechanismSet(terms);
+    }
+
+    /// @notice Re-point a signal's verifier/selector. Does NOT reset that signal's tree.
+    function setSignalSource(uint8 slot, address verifier, bytes4 witnessSelector) external onlyOwner {
+        require(slot < signals.length, "bad slot");
+        require(verifier != address(0), "zero verifier");
+        signals[slot] = SignalSource(verifier, witnessSelector);
+        emit SignalSourceSet(slot, verifier, witnessSelector);
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
@@ -169,99 +177,129 @@ contract DIDRegistry is SoulboundToken {
     }
 
     // -----------------------------------------------------------------
-    // Signal reading
+    // Signal / witness reading
     // -----------------------------------------------------------------
 
-    /// @notice Returns whether `account` currently satisfies the signal in `slot`.
-    ///         An unconfigured slot (verifier == 0) is always false (placeholder).
-    function hasSignal(uint8 slot, address account) public view returns (bool) {
-        if (slot >= MAX_SIGNALS) return false;
-        SignalSource memory src = signals[slot];
-        if (src.verifier == address(0)) return false;
-        (bool ok, bytes memory ret) =
-            src.verifier.staticcall(abi.encodeWithSelector(src.selector, account));
-        return ok && ret.length >= 32 && abi.decode(ret, (bool));
+    function numSignals() public view returns (uint256) {
+        return signals.length;
     }
 
-    /// @notice The bitmap of signals `account` currently holds (bit i == slot i).
+    function termCount() external view returns (uint256) {
+        return terms.length;
+    }
+
+    /// @notice The unique witness for `account` under signal `slot`, or 0 if not held.
+    ///         This is also the key inserted into the signal's tree at registration.
+    function witnessOf(uint8 slot, address account) public view returns (bytes32) {
+        if (slot >= signals.length) return bytes32(0);
+        SignalSource memory src = signals[slot];
+        (bool ok, bytes memory ret) =
+            src.verifier.staticcall(abi.encodeWithSelector(src.witnessSelector, account));
+        if (!ok || ret.length < 32) return bytes32(0);
+        return abi.decode(ret, (bytes32));
+    }
+
+    /// @notice Whether `account` currently holds signal `slot` (witness != 0).
+    function hasSignal(uint8 slot, address account) public view returns (bool) {
+        return witnessOf(slot, account) != bytes32(0);
+    }
+
+    /// @notice The bitmap of signals `account` currently holds (bit i == signal i).
     function signalBitmapOf(address account) public view returns (uint8 bitmap) {
-        for (uint8 s = 0; s < MAX_SIGNALS; s++) {
-            if (hasSignal(s, account)) bitmap |= uint8(1) << s;
+        uint256 n = signals.length;
+        for (uint256 s = 0; s < n; s++) {
+            if (hasSignal(uint8(s), account)) bitmap |= uint8(1) << uint8(s);
         }
     }
 
-    /// @notice The identity commitment `x` for (account, bitmap). Deterministic, so the
-    ///         same verified signal-set always yields the same leaf (enabling de-dup).
-    function previewCommitment(address account, uint8 bitmap) public view returns (bytes32) {
-        return keccak256(abi.encode(DOMAIN, block.chainid, address(this), account, bitmap));
+    /// @notice Whether `account` holds every signal in term `termIndex`.
+    function satisfiesTerm(address account, uint256 termIndex) public view returns (bool) {
+        if (termIndex >= terms.length) return false;
+        uint8 mask = terms[termIndex];
+        return (mask & ~signalBitmapOf(account)) == 0;
+    }
+
+    /// @notice Bitmap of term indices `account` currently satisfies (bit i == term i).
+    ///         A non-zero result means the account can register at least one term.
+    function eligibleTerms(address account) external view returns (uint256 bitmap) {
+        uint8 held = signalBitmapOf(account);
+        for (uint256 i = 0; i < terms.length; i++) {
+            if ((terms[i] & ~held) == 0) bitmap |= (uint256(1) << i);
+        }
     }
 
     // -----------------------------------------------------------------
-    // Registration  —  submit (x, r', π)
+    // Registration
     // -----------------------------------------------------------------
 
-    /// @notice Register `msg.sender`'s aggregated identity.
-    /// @param signalBitmap  The signal-set the caller claims (must match on-chain state).
-    ///                      Defines the leaf x = previewCommitment(caller, signalBitmap).
-    /// @param newRoot       r' — the Merkle root after x is appended.
-    /// @param insertionPath π — sibling hashes along x's path (length == TREE_DEPTH).
-    /// @return tokenId   The freshly minted soulbound credential id for this proof.
-    /// @return leafIndex The tree position x was appended at.
-    ///
-    ///         Each distinct proof registers exactly once (the `used` set blocks exact
-    ///         replays); presenting a *new* proof (a different signal-set) mints a new
-    ///         credential, so an account can accumulate several over time.
-    function register(
-        uint8 signalBitmap,
-        bytes32 newRoot,
-        bytes32[] calldata insertionPath
-    ) external returns (uint256 tokenId, uint256 leafIndex) {
-        // 1. The claimed signal-set must match what the verifier contracts say now.
-        require(signalBitmap != 0, "no signals");
-        require(signalBitmap == signalBitmapOf(msg.sender), "signal mismatch");
+    /// @dev One Sparse-Merkle insertion proof: the post-insert root and the sibling path.
+    struct Insert {
+        bytes32 newRoot;
+        bytes32[] siblings;
+    }
 
-        // 2. Derive the leaf x and reject exact-duplicate proofs.
-        bytes32 commitment = previewCommitment(msg.sender, signalBitmap);
-        require(!usedCommitment[commitment], "already registered");
+    /// @notice Register by satisfying term `termIndex`. For every signal in that term
+    ///         (ascending signal order), supply one `Insert` proof; the witness/key is read
+    ///         on-chain from the verifier. Each witness is inserted into its signal's tree,
+    ///         which rejects any witness already registered (per-signal de-duplication).
+    /// @param termIndex Which DNF term (disjunct) the caller is satisfying.
+    /// @param inserts   One proof per signal in the term, in ascending signal order.
+    /// @return tokenId  The freshly minted soulbound credential id.
+    function register(uint8 termIndex, Insert[] calldata inserts)
+        external
+        returns (uint256 tokenId)
+    {
+        require(termIndex < terms.length, "bad term");
+        uint8 mask = terms[termIndex];
 
-        // 3. Verify & perform the append: (x, r', π) against the public root r.
-        leafIndex = _verifiedInsert(commitment, newRoot, insertionPath);
+        uint256 n = signals.length;
+        uint256 j = 0;
+        for (uint256 s = 0; s < n; s++) {
+            if ((mask & (uint8(1) << uint8(s))) == 0) continue;
 
-        // 4. Record and mint a fresh credential for this proof.
-        usedCommitment[commitment] = true;
-        signalsOf[msg.sender] |= signalBitmap;
+            // The witness is authoritative (read on-chain); the caller cannot forge it.
+            bytes32 key = witnessOf(uint8(s), msg.sender);
+            require(key != bytes32(0), "signal not held");
+
+            require(j < inserts.length, "missing insert");
+            Insert calldata ins = inserts[j++];
+            _smtInsert(uint8(s), key, ins.newRoot, ins.siblings);
+            emit SignalInserted(uint8(s), key, ins.newRoot);
+        }
+        require(j == inserts.length, "extra inserts");
+
         tokenId = _mint(msg.sender);
-        tokenOfCommitment[commitment] = tokenId;
-
-        emit Registered(msg.sender, commitment, leafIndex, signalBitmap, newRoot, tokenId);
+        emit Registered(msg.sender, termIndex, mask, tokenId);
     }
 
     // -----------------------------------------------------------------
-    // Incremental Merkle internals
+    // Sparse Merkle Tree internals
     // -----------------------------------------------------------------
 
-    /// @dev Verifies that appending `leaf` at the next free index, using sibling path
-    ///      `path`, transforms the current root `r` into `newRoot` (r'), then commits it.
-    ///
-    ///      Soundness: with `path` we recompute the root twice along the same branch —
-    ///      once with the empty-leaf value (must equal the current root `r`, proving the
-    ///      slot is empty and `path` is the genuine frontier) and once with `leaf` (must
-    ///      equal `newRoot`). The index is taken from storage, never the caller.
-    function _verifiedInsert(
-        bytes32 leaf,
-        bytes32 newRoot,
-        bytes32[] calldata path
-    ) internal returns (uint256 index) {
-        index = nextIndex;
-        require(index < (uint256(1) << TREE_DEPTH), "tree full");
-        require(path.length == TREE_DEPTH, "bad path length");
-        require(leaf != bytes32(0), "zero leaf");
+    /// @notice The leaf value stored for a key (witness). Domain-tagged so it can never
+    ///         collide with an internal node or the empty leaf.
+    function leafHash(bytes32 key) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked("DIDRegistry.smt-leaf", key));
+    }
 
-        bytes32 emptyNode = _zeros[0]; // current value at `index`
+    /// @dev Verifies that filling the (currently empty) leaf for `key` in signal `s`'s
+    ///      tree, using sibling path `siblings`, turns the current root into `newRoot`,
+    ///      then commits it. Reverts if the leaf is already filled (witness duplicate).
+    function _smtInsert(
+        uint8 s,
+        bytes32 key,
+        bytes32 newRoot,
+        bytes32[] calldata siblings
+    ) internal {
+        require(siblings.length == TREE_DEPTH, "bad proof length");
+        bytes32 leaf = leafHash(key);
+
+        // The leaf position is the low TREE_DEPTH bits of the key (consumed LSB-first).
+        uint256 idx = uint256(key);
+        bytes32 emptyNode = bytes32(0); // empty-leaf value
         bytes32 filledNode = leaf;
-        uint256 idx = index;
         for (uint256 i = 0; i < TREE_DEPTH; i++) {
-            bytes32 sib = path[i];
+            bytes32 sib = siblings[i];
             if (idx & 1 == 0) {
                 emptyNode = _hashPair(emptyNode, sib);
                 filledNode = _hashPair(filledNode, sib);
@@ -271,12 +309,12 @@ contract DIDRegistry is SoulboundToken {
             }
             idx >>= 1;
         }
-        require(emptyNode == root, "stale root / bad path");
+        // Folding the EMPTY leaf must reproduce the current root: proves the witness is
+        // not yet registered AND that `siblings` is the genuine cofactor.
+        require(emptyNode == signalRoot[s], "duplicate or stale proof");
         require(filledNode == newRoot, "newRoot mismatch");
 
-        root = newRoot;
-        isKnownRoot[newRoot] = true;
-        nextIndex = index + 1;
+        signalRoot[s] = newRoot;
     }
 
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
@@ -295,5 +333,11 @@ contract DIDRegistry is SoulboundToken {
     /// @notice The empty-subtree root at height `height` (clients building π need these).
     function zeros(uint256 height) external view returns (bytes32) {
         return _zeros[height];
+    }
+
+    /// @notice Convenience: the leaf index (path) a witness key occupies in any tree.
+    function leafIndexOf(bytes32 key) external view returns (uint256) {
+        uint256 mask = TREE_DEPTH >= 256 ? type(uint256).max : (uint256(1) << TREE_DEPTH) - 1;
+        return uint256(key) & mask;
     }
 }

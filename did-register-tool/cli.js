@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 // DIDRegistry CLI
 // ---------------------------------------------------------------------------
-// Generate the registration tuple, inspect signal status, or submit a registration.
+// Inspect the mechanism + an account's signals, build the per-signal insert proofs,
+// or submit a registration.
 //
-//   node cli.js prepare  --rpc <url> --registry <addr> --account <addr>
-//   node cli.js signals  --rpc <url> --registry <addr> --account <addr>
-//   node cli.js register --rpc <url> --registry <addr> --pk <0x privkey>
-//   node cli.js root     --rpc <url> --registry <addr>
+//   node cli.js mechanism --rpc <url> --registry <addr>
+//   node cli.js signals   --rpc <url> --registry <addr> --account <addr>
+//   node cli.js prepare   --rpc <url> --registry <addr> --account <addr> [--term <i>]
+//   node cli.js register  --rpc <url> --registry <addr> --pk <0x privkey> [--term <i>]
 //
-// `prepare` prints the exact (signalBitmap, newRoot, insertionPath) you'd pass to
-// register(...) — handy for relayers, scripts, or the frontend.
+// Eligibility is a negation-free DNF (OR of AND-terms). `prepare`/`register` default to
+// the first term the account satisfies; pass --term to choose another.
 import { ethers } from "ethers";
-import { getRegistry, prepareRegistration, SIGNAL_LABELS } from "./did-registry.js";
+import {
+  getRegistry, prepareRegistration, inspect, describeMechanism, termSignals, SIGNAL_LABELS,
+} from "./did-registry.js";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -36,19 +39,25 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
   if (!cmd) {
-    console.error("Usage: node cli.js <prepare|signals|register|root> --rpc <url> --registry <addr> [...]");
+    console.error("Usage: node cli.js <mechanism|signals|prepare|register> --rpc <url> --registry <addr> [...]");
     process.exit(1);
   }
 
   const provider = new ethers.JsonRpcProvider(need(args, "rpc"));
   const registryAddr = need(args, "registry");
 
-  if (cmd === "root") {
+  if (cmd === "mechanism") {
     const reg = getRegistry(registryAddr, provider);
+    const n = Number(await reg.numSignals());
+    const tc = Number(await reg.termCount());
+    const terms = [];
+    for (let i = 0; i < tc; i++) terms.push(Number(await reg.terms(i)));
     console.log(JSON.stringify({
-      root: await reg.root(),
-      nextIndex: Number(await reg.nextIndex()),
+      numSignals: n,
       treeDepth: Number(await reg.TREE_DEPTH()),
+      terms,
+      formula: describeMechanism(terms, SIGNAL_LABELS, n),
+      termDetail: terms.map((m, i) => ({ index: i, mask: m, signals: termSignals(m, n) })),
     }, null, 2));
     return;
   }
@@ -56,20 +65,15 @@ async function main() {
   if (cmd === "signals") {
     const reg = getRegistry(registryAddr, provider);
     const account = need(args, "account");
-    const bitmap = Number(await reg.signalBitmapOf(account));
-    const max = Number(await reg.MAX_SIGNALS());
-    const rows = [];
-    for (let s = 0; s < max; s++) {
-      const [verifier] = await reg.signals(s);
-      rows.push({
-        slot: s,
-        label: SIGNAL_LABELS[s] ?? `Signal #${s + 1}`,
-        verifier,
-        configured: verifier !== ethers.ZeroAddress,
-        active: (bitmap & (1 << s)) !== 0,
-      });
-    }
-    console.log(JSON.stringify({ account, bitmap, signals: rows }, null, 2));
+    const info = await inspect(reg, account);
+    console.log(JSON.stringify({
+      account,
+      heldBitmap: info.heldBitmap,
+      formula: describeMechanism(info.terms, SIGNAL_LABELS, info.n),
+      eligibleTerms: info.eligibleTerms,
+      alreadyRegistered: info.alreadyRegistered,
+      signals: info.signals,
+    }, null, 2));
     return;
   }
 
@@ -83,29 +87,30 @@ async function main() {
     if (!account) need(args, "account");
 
     const reg = getRegistry(registryAddr, signer ?? provider);
-    const plan = await prepareRegistration(reg, account);
+    const opts = args.term !== undefined ? { termIndex: Number(args.term) } : {};
+    const plan = await prepareRegistration(reg, account, opts);
 
-    if (plan.bitmap === 0) {
-      console.error(`Account ${account} holds no signals — verify on a signal contract first.`);
+    if (!plan.canRegister) {
+      console.error(`Cannot register ${account}: ${plan.reason}`);
+      console.log(JSON.stringify({
+        account,
+        formula: describeMechanism(plan.info.terms, SIGNAL_LABELS, plan.info.n),
+        eligibleTerms: plan.info.eligibleTerms,
+        signals: plan.info.signals,
+      }, null, 2));
       process.exit(2);
-    }
-    if (plan.alreadyRegistered) {
-      const held = Number(await reg.balanceOf(account));
-      console.error(`Account ${account} already holds ${held} credential(s). Registering a NEW proof mints another; an exact replay is rejected on-chain.`);
     }
 
     console.log(JSON.stringify({
       account,
-      bitmap: plan.bitmap,
-      signals: plan.signals,
-      commitment: plan.commitment,
-      leafIndex: plan.leafIndex,
-      newRoot: plan.newRoot,
-      insertionPath: plan.insertionPath,
+      termIndex: plan.termIndex,
+      termSignals: plan.signals,
+      keys: plan.keys,
+      inserts: plan.inserts,
     }, null, 2));
 
     if (cmd === "register") {
-      console.error("Submitting register() …");
+      console.error(`Submitting register(term ${plan.termIndex}) …`);
       const tx = await reg.register(...plan.callArgs);
       console.error("tx:", tx.hash);
       const rcpt = await tx.wait();
