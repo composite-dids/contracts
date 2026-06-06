@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Decentralised Identity — Register</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141925; --line:#232a3a; --fg:#e6e9ef; --mut:#8b93a7; --acc:#5b8cff; --ok:#3fb950; --err:#f85149; --warn:#d29922; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:720px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mut); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
+  label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.04em; }
+  input { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:#222b3d; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .row > * { flex:1; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .kv:last-child { border-bottom:0; }
+  .kv .k { color:var(--mut); }
+  .kv .v { font-family:ui-monospace,Menlo,monospace; word-break:break-all; text-align:right; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+  .pill.ok { background:rgba(63,185,80,.15); color:var(--ok); }
+  .pill.err { background:rgba(248,81,73,.15); color:var(--err); }
+  .pill.warn { background:rgba(210,153,34,.15); color:var(--warn); }
+  .pill.mut { background:#222b3d; color:var(--mut); }
+  .muted { color:var(--mut); font-size:13px; }
+  .hidden { display:none; }
+  .signal { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line); }
+  .signal:last-child { border-bottom:0; }
+  .signal .lbl { font-weight:600; }
+  .signal .meta { color:var(--mut); font-size:12px; font-family:ui-monospace,Menlo,monospace; }
+  #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
+  a { color:var(--acc); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="muted" style="margin-bottom:10px;">
+    <a href="./index.html">Validator identity</a>
+    <a href="./balance.html" style="margin-left:14px;">Historical balance</a>
+    <a href="./reclaim.html" style="margin-left:14px;">zkTLS identity</a>
+    <a href="./register.html" style="margin-left:14px;"><b>Register DID</b></a>
+  </nav>
+  <h1>Register your decentralised identity</h1>
+  <p class="sub">Aggregate the identity signals you've proven — validator, balance, GitHub,
+  Google — then register to mint a non-transferable credential. Each distinct set of
+  signals registers once; duplicates are rejected on-chain.</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="connect">Connect wallet</button>
+      <div class="muted" style="flex:2; text-align:right;"><span class="pill" id="netBadge"></span> <span id="acct">not connected</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>DIDRegistry contract address</label>
+    <input id="contract" placeholder="0x…" />
+    <div class="row" style="margin-top:10px;">
+      <button id="refresh" class="secondary">Refresh signals</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="signalsCard">
+    <div class="kv"><span class="k">Aggregated signals</span><span class="v" id="bitmapV">—</span></div>
+    <div id="signalList"></div>
+    <p class="muted" style="margin:12px 0 0;">Each row is a signal this registry accepts.
+    Don't hold one yet? Use the <b>prove ↗</b> link, then come back and refresh.</p>
+  </div>
+
+  <div class="card hidden" id="planCard">
+    <div class="kv"><span class="k">Commitment (leaf x)</span><span class="v" id="pCommit"></span></div>
+    <div class="kv"><span class="k">Leaf index</span><span class="v" id="pIndex"></span></div>
+    <div class="kv"><span class="k">Current root r</span><span class="v" id="pRoot"></span></div>
+    <div class="kv"><span class="k">New root r'</span><span class="v" id="pNewRoot"></span></div>
+    <div style="margin-top:14px;" class="row">
+      <button id="register">Register — submit (x, r', π)</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="statusCard">
+    <div class="kv"><span class="k">Registration</span><span class="v" id="sStatus"></span></div>
+    <div class="kv"><span class="k">Credentials held</span><span class="v" id="sToken"></span></div>
+  </div>
+
+  <div class="card"><div id="log">Connect your wallet and enter the DIDRegistry address.</div></div>
+</div>
+
+<script type="module">
+import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.13.4/+esm";
+
+// ---- network config (mirrors index.html) ----
+const NETWORKS = {
+  sepolia:   { chainId: 11155111, hex: "0xaa36a7", name: "Sepolia", explorer: "https://sepolia.etherscan.io" },
+  mainnet:   { chainId: 1,        hex: "0x1",      name: "Ethereum", explorer: "https://etherscan.io" },
+  localhost: { chainId: 31337,    hex: "0x7a69",   name: "Localhost", explorer: "", rpc: "http://127.0.0.1:8545" }, // anvil (?net=localhost)
+};
+const ACTIVE = NETWORKS[(new URLSearchParams(location.search).get("net")) || "sepolia"] || NETWORKS.sepolia;
+
+// No-wallet fallback: ONLY on the local Anvil chain, connect with the well-known
+// Anvil test key so a judge can click through the app without installing MetaMask.
+// This is a publicly-known LOCAL-ONLY key — never enabled on a real network.
+const LOCAL_TEST_PK = ACTIVE.chainId === 31337
+  ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" : null;
+
+const SIGNAL_LABELS = [
+  "Beacon validator identity",
+  "Historical balance",
+  "GitHub account",
+  "Google account",
+];
+// Where to go prove each signal if you don't hold it yet.
+const SIGNAL_PROVE_URLS = ["index.html", "balance.html", "reclaim.html", "reclaim.html"];
+
+const ABI = [
+  "function TREE_DEPTH() view returns (uint256)",
+  "function root() view returns (bytes32)",
+  "function nextIndex() view returns (uint256)",
+  "function MAX_SIGNALS() view returns (uint8)",
+  "function signals(uint256) view returns (address verifier, bytes4 selector)",
+  "function signalBitmapOf(address account) view returns (uint8)",
+  "function previewCommitment(address account, uint8 bitmap) view returns (bytes32)",
+  "function isRegistered(address account) view returns (bool)",
+  "function balanceOf(address) view returns (uint256)",
+  "function register(uint8 signalBitmap, bytes32 newRoot, bytes32[] insertionPath) returns (uint256 tokenId, uint256 leafIndex)",
+  "event Registered(address indexed account, bytes32 indexed commitment, uint256 leafIndex, uint8 signalBitmap, bytes32 newRoot, uint256 tokenId)",
+];
+
+// ---- inline incremental Merkle tree (mirrors DIDRegistry + the JS lib exactly) ----
+const ZERO = "0x" + "00".repeat(32);
+const hashPair = (a, b) => ethers.keccak256(ethers.concat([a, b]));
+class Tree {
+  constructor(depth) {
+    this.depth = depth; this.count = 0;
+    this.zeros = [ZERO];
+    for (let i = 0; i < depth; i++) this.zeros.push(hashPair(this.zeros[i], this.zeros[i]));
+    this.filled = this.zeros.slice(0, depth);
+    this.root = this.zeros[depth];
+  }
+  previewInsert(leaf) {
+    let idx = this.count, cur = leaf; const path = [];
+    for (let i = 0; i < this.depth; i++) {
+      if ((idx & 1) === 0) { path.push(this.zeros[i]); cur = hashPair(cur, this.zeros[i]); }
+      else { path.push(this.filled[i]); cur = hashPair(this.filled[i], cur); }
+      idx >>= 1;
+    }
+    return { newRoot: cur, path, leafIndex: this.count };
+  }
+  insert(leaf) {
+    let idx = this.count, cur = leaf;
+    for (let i = 0; i < this.depth; i++) {
+      if ((idx & 1) === 0) { this.filled[i] = cur; cur = hashPair(cur, this.zeros[i]); }
+      else { cur = hashPair(this.filled[i], cur); }
+      idx >>= 1;
+    }
+    this.root = cur; this.count++;
+  }
+}
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2); };
+const append = (m) => { $("log").textContent += "\n" + m; };
+const short = (h) => h.slice(0, 10) + "…" + h.slice(-6);
+
+$("netBadge").textContent = ACTIVE.name;
+$("netBadge").classList.add(ACTIVE.chainId === 1 ? "err" : "ok");
+
+let provider, signer, account, plan;
+
+function contract(readOnly = false) {
+  const addr = $("contract").value.trim();
+  if (!ethers.isAddress(addr)) throw new Error("Enter a valid DIDRegistry address");
+  return new ethers.Contract(addr, ABI, readOnly ? provider : signer);
+}
+
+async function ensureChain() {
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) === ACTIVE.chainId) return true;
+  if (!window.ethereum) { log(`Provider is on chain ${net.chainId}, expected ${ACTIVE.chainId} (${ACTIVE.name}).`); return false; }
+  log(`Wrong network. Switching to ${ACTIVE.name} …`);
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: ACTIVE.hex }] });
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    return true;
+  } catch { log(`Please switch your wallet to ${ACTIVE.name}.`); return false; }
+}
+
+$("connect").onclick = async () => {
+  try {
+    if (window.ethereum) {
+      provider = new ethers.BrowserProvider(window.ethereum);
+      await provider.send("eth_requestAccounts", []);
+      signer = await provider.getSigner();
+      if (!(await ensureChain())) return;
+    } else if (ACTIVE.rpc && LOCAL_TEST_PK) {
+      // No browser wallet: use the local Anvil test account (LOCAL ONLY).
+      provider = new ethers.JsonRpcProvider(ACTIVE.rpc);
+      signer = new ethers.Wallet(LOCAL_TEST_PK, provider);
+      append("No browser wallet — using the local Anvil test account (test only).");
+    } else {
+      return log("No injected wallet found. Install MetaMask, or run the local demo and open this page with ?net=localhost.");
+    }
+    account = await signer.getAddress();
+    $("acct").textContent = account;
+    log("Connected: " + account);
+    if (ethers.isAddress($("contract").value.trim())) maybeAutoLoad();
+    else append("Now enter the DIDRegistry address above to load your signals.");
+  } catch (e) { log("Connect error: " + (e.shortMessage || e.message || e)); }
+};
+
+// Draw the four signal rows immediately, before anything is read, so the user can
+// see the structure (slots 3 & 4 are reserved for upcoming proofs).
+function renderSkeleton() {
+  const list = $("signalList"); list.innerHTML = "";
+  SIGNAL_LABELS.forEach((label, s) => {
+    const row = document.createElement("div");
+    row.className = "signal";
+    row.innerHTML = `<div><div class="lbl">${label}</div>
+      <div class="meta"><a href="./${SIGNAL_PROVE_URLS[s]}" target="_blank" rel="noopener">prove ↗</a></div></div>
+      <span class="pill mut">—</span>`;
+    list.appendChild(row);
+  });
+  $("signalsCard").classList.remove("hidden");
+}
+
+// Auto-load once we have both a connected wallet and a valid registry address.
+let autoTimer;
+function maybeAutoLoad() {
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(async () => {
+    if (!account || !ethers.isAddress($("contract").value.trim())) return;
+    try { log("Reading signals and rebuilding the registry tree …"); await buildPlan(); append("Ready."); }
+    catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+  }, 200);
+}
+
+// Rebuild the on-chain tree from Registered events, then prepare (x, r', π).
+async function buildPlan() {
+  const c = contract(true);
+  const depth = Number(await c.TREE_DEPTH());
+  const bitmap = Number(await c.signalBitmapOf(account));
+
+  // ---- render signal list ----
+  const max = Number(await c.MAX_SIGNALS());
+  const list = $("signalList"); list.innerHTML = "";
+  for (let s = 0; s < max; s++) {
+    const [verifier] = await c.signals(s);
+    const configured = verifier !== ethers.ZeroAddress;
+    const active = (bitmap & (1 << s)) !== 0;
+    const status = active ? '<span class="pill ok">held</span>'
+      : configured ? '<span class="pill err">not proven</span>'
+      : '<span class="pill mut">not wired</span>';
+    const label = SIGNAL_LABELS[s] ?? ("Signal #" + (s + 1));
+    const meta = !configured ? "0x0000… not wired yet"
+      : active ? verifier
+      : `<a href="./${SIGNAL_PROVE_URLS[s] ?? "#"}" target="_blank" rel="noopener">prove ↗</a> · ${verifier.slice(0,10)}…`;
+    const row = document.createElement("div");
+    row.className = "signal";
+    row.innerHTML = `<div><div class="lbl">${label}</div><div class="meta">${meta}</div></div>${status}`;
+    list.appendChild(row);
+  }
+  $("bitmapV").innerHTML = bitmap ? `0b${bitmap.toString(2).padStart(max, "0")} (${bitmap})`
+    : '<span class="pill err">none — prove a signal first</span>';
+  $("signalsCard").classList.remove("hidden");
+
+  // ---- already registered? ----
+  await loadStatus();
+
+  if (bitmap === 0) { $("planCard").classList.add("hidden"); plan = null; return; }
+
+  const commitment = await c.previewCommitment(account, bitmap);
+  const onchainRoot = await c.root();
+
+  // replay Registered events to rebuild the frontier
+  const tree = new Tree(depth);
+  const evs = await c.queryFilter(c.filters.Registered(), 0, "latest");
+  evs.sort((a, b) => Number(a.args.leafIndex) - Number(b.args.leafIndex));
+  for (const ev of evs) tree.insert(ev.args.commitment);
+  if (tree.root.toLowerCase() !== onchainRoot.toLowerCase())
+    throw new Error("local root != on-chain root (rebuild stale)");
+
+  const { newRoot, path, leafIndex } = tree.previewInsert(commitment);
+  plan = { bitmap, commitment, newRoot, path, leafIndex, root: onchainRoot };
+
+  $("pCommit").textContent = short(commitment);
+  $("pIndex").textContent = leafIndex;
+  $("pRoot").textContent = short(onchainRoot);
+  $("pNewRoot").textContent = short(newRoot);
+  $("planCard").classList.remove("hidden");
+  append(`Prepared (x, r', π): leaf #${leafIndex}, path length ${path.length}.`);
+}
+
+$("refresh").onclick = async () => {
+  try {
+    if (!account) return log("Connect your wallet first.");
+    if (!ethers.isAddress($("contract").value.trim())) return log("Enter the DIDRegistry address first.");
+    log("Reading signals and rebuilding the registry tree …");
+    await buildPlan();
+    append("Ready.");
+  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+};
+
+// Typing/pasting a registry address auto-loads (and persists it for next time).
+$("contract").addEventListener("input", () => {
+  const v = $("contract").value.trim();
+  if (ethers.isAddress(v)) localStorage.setItem("didRegistry", v);
+  maybeAutoLoad();
+});
+
+// On load: draw the skeleton rows and prefill the registry from ?registry= or storage.
+renderSkeleton();
+const prefill = new URLSearchParams(location.search).get("registry") || localStorage.getItem("didRegistry");
+if (prefill) $("contract").value = prefill;
+if (!window.ethereum && LOCAL_TEST_PK) {
+  $("connect").textContent = "Connect (local test account)";
+  log("Local demo mode — no MetaMask needed. Click Connect to use the Anvil test account.");
+}
+
+$("register").onclick = async () => {
+  try {
+    if (!plan) return log("Nothing to register — refresh signals first.");
+    if (!(await ensureChain())) return;
+    const c = contract();
+    log("Sending register() …");
+    const tx = await c.register(plan.bitmap, plan.newRoot, plan.path);
+    append("tx: " + ACTIVE.explorer + "/tx/" + tx.hash);
+    await tx.wait();
+    append("✓ mined — credential minted.");
+    await buildPlan();
+  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+};
+
+async function loadStatus() {
+  const c = contract(true);
+  const registered = await c.isRegistered(account);
+  const held = await c.balanceOf(account);
+  $("sStatus").innerHTML = registered ? '<span class="pill ok">registered</span>'
+    : '<span class="pill warn">not yet</span>';
+  $("sToken").textContent = held.toString();
+  $("statusCard").classList.remove("hidden");
+}
+</script>
+</body>
+</html>

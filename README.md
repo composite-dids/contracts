@@ -2,6 +2,13 @@
 
 On-chain verification of various types of identity.
 
+## Registration (local only for now!)
+Just run 
+```
+scripts/demo-local.sh
+```
+Follow the instruction locally, can use any signals provided in the following.
+
 **Unified frontend:** `frontend/index.html` is a single page with tabs for both
 proofs (historical balance, zkTLS identity) sharing one wallet connection, network
 guard, and log — plus the negative-test panels. The standalone pages

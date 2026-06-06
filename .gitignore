@@ -1,0 +1,8 @@
+# Foundry build artifacts
+out/
+cache/
+broadcast/
+
+# Node
+node_modules/
+npm-debug.log*
