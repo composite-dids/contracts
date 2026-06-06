@@ -102,10 +102,18 @@ abstract contract ReclaimIdentity {
         // 5. Extract the handle and record the signal.
         string memory handle = _extract(context, fieldKey);
         require(bytes(handle).length > 0, "handle not found");
+
+        // 6. Subclass hook for extra claim checks (e.g. arXiv: >= N papers). No-op by default.
+        _afterExtract(context, handle);
+
         isVerified[msg.sender] = true;
         handleOf[msg.sender] = handle;
         emit IdentityVerified(msg.sender, handle, nullifier);
     }
+
+    /// @dev Override to add provider-specific checks on the proof context. Default no-op,
+    ///      so GitHub/Google behave exactly as before.
+    function _afterExtract(string memory context, string memory handle) internal view virtual {}
 
     // ---------------------------------------------------------------------
     // context parsing (ported from Reclaim's Claims.extractFieldFromContext)

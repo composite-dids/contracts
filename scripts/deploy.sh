@@ -37,6 +37,8 @@ EXPLORER="https://sepolia.etherscan.io/address"
 RECLAIM_VERIFIER="0xAe94FB09711e1c6B057853a515483792d8e474d0"
 # providerHash binding is unused (not present in Reclaim v5 context); leave empty.
 RECLAIM_PROVIDER_HASH=""
+# ArxivIdentity: 0 => rely on a captured paper id being present (>= 1 paper).
+ARXIV_MIN_PAPERS=0
 
 # ---- args (with defaults) ----
 LOOKBACK="${1:-100}"
@@ -72,22 +74,27 @@ echo "Deploying GithubIdentity…"
 GH_ADDR="$(deploy "GithubIdentity.sol:GithubIdentity" "$RECLAIM_VERIFIER" "$RECLAIM_PROVIDER_HASH")"
 echo "Deploying GoogleIdentity…"
 GG_ADDR="$(deploy "GoogleIdentity.sol:GoogleIdentity" "$RECLAIM_VERIFIER" "$RECLAIM_PROVIDER_HASH")"
+echo "Deploying ArxivIdentity…"
+AX_ADDR="$(deploy "ArxivIdentity.sol:ArxivIdentity" "$RECLAIM_VERIFIER" "$RECLAIM_PROVIDER_HASH" "$ARXIV_MIN_PAPERS")"
 
 echo
 echo "✓ Deployed:"
 printf "  %-26s %s\n" "HistoricalBalanceVerifier" "$BAL_ADDR"
 printf "  %-26s %s\n" "GithubIdentity"            "$GH_ADDR"
 printf "  %-26s %s\n" "GoogleIdentity"            "$GG_ADDR"
+printf "  %-26s %s\n" "ArxivIdentity"             "$AX_ADDR"
 echo
 echo "Sanity checks:"
 echo "  HBV.MIN_AGE         = $(cast call "$BAL_ADDR" 'MIN_AGE()(uint256)' --rpc-url "$RPC_URL")"
 echo "  HBV.MIN_BALANCE_WEI = $(cast call "$BAL_ADDR" 'MIN_BALANCE_WEI()(uint256)' --rpc-url "$RPC_URL")"
 echo "  Github.reclaim      = $(cast call "$GH_ADDR" 'reclaim()(address)' --rpc-url "$RPC_URL")"
 echo "  Google.reclaim      = $(cast call "$GG_ADDR" 'reclaim()(address)' --rpc-url "$RPC_URL")"
+echo "  Arxiv.minPapers     = $(cast call "$AX_ADDR" 'minPapers()(uint256)' --rpc-url "$RPC_URL")"
 echo
 echo "Etherscan:"
 echo "  $EXPLORER/$BAL_ADDR"
 echo "  $EXPLORER/$GH_ADDR"
 echo "  $EXPLORER/$GG_ADDR"
+echo "  $EXPLORER/$AX_ADDR"
 echo
-echo "Paste these into the frontends: balance.html (HBV) and reclaim.html (Github/Google)."
+echo "Paste these into frontend/index.html (R_PROVIDERS) + balance contract field."

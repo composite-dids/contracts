@@ -75,10 +75,15 @@ Sepolia (`0xAe94FB09711e1c6B057853a515483792d8e474d0`), so nothing extra to depl
   trust anchor), then adds **provider binding** (optional `providerHash`), **user binding**
   (`contextAddress == msg.sender`, stops front-running), and a **sybil nullifier**. Stores
   `isVerified` + the extracted `handleOf`.
-- **`GithubIdentity.sol`** / **`GoogleIdentity.sol`** — thin subclasses fixing the
-  extracted field (`username` / `email`). Deployed on Sepolia:
+- **`GithubIdentity.sol`** / **`GoogleIdentity.sol`** / **`ArxivIdentity.sol`** — thin
+  subclasses fixing the extracted field. `ArxivIdentity` additionally proves **≥ 1
+  paper**: the provider scrapes your login-gated "articles owned" page and captures a
+  paper id (so no proof exists for a 0-paper account), and the contract requires that
+  capture to be non-empty (or, with `minPapers > 1`, parses a numeric `paperCount`).
+  Deployed on Sepolia:
   - GitHub  `0x842D4e4B5A531cA42eCF601ced9e606405888704`
   - Google  `0x974f84EF3b064c60b4D138043A92685B37BCFD66`
+  - arXiv   `0x4352F52ea5cA41768d16aa5aF7b1D5ad3fA53Ef4` (≥ 1 paper; field `first_paper_title`)
 - **`frontend/reclaim.html`** — zero-build UI using `@reclaimprotocol/js-sdk` (via CDN):
   connect wallet → pick GitHub/Google → run the Reclaim flow (QR/link) with the wallet set
   as the context address → submit the proof on-chain. Set `APP_SECRET` in the file first

@@ -105,6 +105,7 @@
       <div class="row">
         <button id="r_pickGithub" class="secondary">GitHub username</button>
         <button id="r_pickGoogle" class="secondary">Google email</button>
+        <button id="r_pickArxiv" class="secondary">arXiv (≥1 paper)</button>
       </div>
       <div class="kv" style="margin-top:12px;"><span class="k">Target contract</span><span class="v" id="r_cAddr">—</span></div>
       <div style="margin-top:12px;"><button id="r_start" disabled>Start verification</button></div>
@@ -157,6 +158,7 @@ const R_APP_SECRET = "0x9931e638687b99dc932264046325befa33d2d0ef43ec5067360a9e59
 const R_PROVIDERS = {
   github: { id: "6d3f6753-7ee6-49ee-a545-62f1b1822ae5", contract: "0x842D4e4B5A531cA42eCF601ced9e606405888704", label: "GitHub username", field: "username" },
   google: { id: "f9f383fd-32d9-4c54-942f-5e9fda349762", contract: "0x974f84EF3b064c60b4D138043A92685B37BCFD66", label: "Google email", field: "email" },
+  arxiv:  { id: "1b28976b-34a2-423a-ba0c-1ef79436efb2",  contract: "0x4352F52ea5cA41768d16aa5aF7b1D5ad3fA53Ef4", label: "arXiv (≥1 paper)", field: "first_paper_title" },
 };
 
 const ABI_BALANCE = [
@@ -312,11 +314,14 @@ function r_pick(kind) {
   rSel = kind;
   $("r_pickGithub").classList.toggle("sel", kind === "github");
   $("r_pickGoogle").classList.toggle("sel", kind === "google");
+  $("r_pickArxiv").classList.toggle("sel", kind === "arxiv");
   $("r_cAddr").textContent = R_PROVIDERS[kind].contract;
+  if (R_PROVIDERS[kind].id.startsWith("PASTE_")) log("Set the " + kind + " provider ID in index.html (R_PROVIDERS) before starting.");
   r_refreshStart();
 }
 $("r_pickGithub").onclick = () => r_pick("github");
 $("r_pickGoogle").onclick = () => r_pick("google");
+$("r_pickArxiv").onclick = () => r_pick("arxiv");
 function r_refreshStart() { $("r_start").disabled = !(account && rSel); }
 $("r_start").onclick = async () => {
   try {
