@@ -1,6 +1,6 @@
 {
   "network": "sepolia",
-  "registry": "0xb1768B404EB4102CCF4DBc0c9b661a17D48dcef8",
+  "registry": "0x38148BACc9575AD5d6c4530F628B8D280f6E32Ec",
   "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
   "reclaim": {
     "appId": "0xFe1b1682Fb71e59fE7579e7a10324e8211c3c688",
