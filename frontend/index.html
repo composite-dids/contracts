@@ -5,77 +5,163 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Composite DID — Register</title>
 <style>
-  :root { --bg:#0b0e14; --card:#141925; --line:#232a3a; --fg:#e6e9ef; --mut:#8b93a7; --acc:#5b8cff; --ok:#3fb950; --err:#f85149; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
-  .wrap { max-width:720px; margin:0 auto; padding:28px 20px 80px; }
-  h1 { font-size:22px; margin:0 0 4px; }
-  h2 { font-size:18px; margin:0 0 10px; }
-  .sub { color:var(--mut); margin:0 0 18px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin:14px 0; }
-  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-  button { padding:10px 16px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
-  button.secondary { background:#222b3d; }
-  button:disabled { opacity:.45; cursor:not-allowed; }
-  input { width:100%; padding:10px 12px; background:#0e1220; border:1px solid var(--line); border-radius:8px; color:var(--fg); font:inherit; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
-  .pill.ok { background:rgba(63,185,80,.15); color:var(--ok); }
-  .pill.err { background:rgba(248,81,73,.15); color:var(--err); }
-  .pill.mut { background:#222b3d; color:var(--mut); }
-  .muted { color:var(--mut); font-size:13px; }
-  .hidden { display:none; }
-  .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
-  .kv:last-child { border-bottom:0; } .kv .k { color:var(--mut); } .kv .v { font-family:ui-monospace,Menlo,monospace; word-break:break-all; text-align:right; }
-  .sig { display:flex; align-items:center; gap:12px; padding:12px; border:1px solid var(--line); border-radius:10px; margin:8px 0; cursor:pointer; }
-  .sig.on { border-color:var(--acc); background:rgba(91,140,255,.08); }
-  .sig .box { width:18px; height:18px; border-radius:5px; border:2px solid var(--mut); flex:0 0 auto; }
-  .sig.on .box { background:var(--acc); border-color:var(--acc); }
-  .sig .lbl { flex:1; } .sig .st { font-size:12px; }
-  .steps { display:flex; gap:8px; margin-bottom:16px; font-size:12px; color:var(--mut); }
-  .steps span { padding:4px 10px; border-radius:999px; background:#0e1220; border:1px solid var(--line); }
-  .steps span.active { color:#fff; background:var(--acc); border-color:var(--acc); }
-  #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
-  #qr { background:#fff; padding:10px; border-radius:8px; display:inline-block; }
-  a { color:var(--acc); } code { font-family:ui-monospace,Menlo,monospace; }
+  :root{
+    --bg:#0a0c12; --bg2:#0e1018; --card:#151a24; --card2:#1b2230; --line:#272f40;
+    --fg:#eef1f6; --mut:#8a93a7; --acc:#6d8bff; --acc2:#9b6bff; --ok:#46c46a; --err:#ff5f57;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--fg);
+    background:radial-gradient(1100px 560px at 50% -12%, #1a2342 0%, rgba(26,35,66,0) 62%), var(--bg);}
+  .wrap{max-width:760px;margin:0 auto;padding:30px 20px 90px}
+  a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:.92em}
+
+  /* header */
+  .top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .brand{display:flex;align-items:center;gap:13px}
+  .logo{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--acc),var(--acc2));
+    display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:17px;box-shadow:0 8px 24px rgba(109,139,255,.4)}
+  .brand h1{font-size:20px;margin:0;letter-spacing:-.3px}
+  .brand .tag{color:var(--mut);font-size:12.5px;margin-top:1px}
+  .chip{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 13px;font-size:13px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#566;}
+  .chip.on .dot{background:var(--ok);box-shadow:0 0 0 3px rgba(70,196,106,.18)}
+  .chip .acct{font-family:ui-monospace,Menlo,monospace;color:var(--mut)}
+  .hubnav{display:flex;gap:14px;font-size:13px}
+  .hubnav a{color:var(--mut)} .hubnav a:hover{color:var(--fg)}
+
+  /* stepper */
+  .steps{display:flex;align-items:center;margin:24px 0 20px}
+  .steps .st{display:flex;align-items:center;gap:9px;flex:0 0 auto;color:var(--mut);font-size:13px;font-weight:600}
+  .steps .st .n{width:27px;height:27px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:var(--card);border:1px solid var(--line);font-size:13px}
+  .steps .st.active{color:var(--fg)}
+  .steps .st.active .n{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff;box-shadow:0 4px 14px rgba(109,139,255,.45)}
+  .steps .bar{flex:1;height:2px;background:var(--line);margin:0 12px;border-radius:2px}
+
+  /* cards / text */
+  h2{font-size:19px;margin:0 0 6px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:16px 0;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+  .pcard{background:var(--bg2);border:1px solid var(--line);border-radius:13px;padding:15px 16px;margin:10px 0}
+
+  /* buttons / inputs */
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  button{padding:11px 18px;border:1px solid transparent;border-radius:11px;background:linear-gradient(135deg,var(--acc),var(--acc2));
+    color:#fff;font:inherit;font-weight:650;cursor:pointer;transition:transform .06s, box-shadow .15s, opacity .15s, border-color .15s}
+  button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 8px 22px rgba(109,139,255,.38)}
+  button.secondary{background:transparent;border-color:var(--line);color:var(--fg)}
+  button.secondary:hover:not(:disabled){border-color:var(--acc);box-shadow:none}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  input{width:100%;padding:11px 13px;background:var(--bg2);border:1px solid var(--line);border-radius:10px;color:var(--fg);font:inherit}
+  input:focus{outline:none;border-color:var(--acc)}
+  label{display:block;font-size:11.5px;color:var(--mut);margin:13px 0 5px;text-transform:uppercase;letter-spacing:.06em}
+
+  /* pills */
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:650}
+  .pill.ok{background:rgba(70,196,106,.16);color:var(--ok)}
+  .pill.err{background:rgba(255,95,87,.16);color:var(--err)}
+  .pill.mut{background:#222a39;color:var(--mut)}
+  .muted{color:var(--mut);font-size:13px}
+  .hidden{display:none}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .kv:last-child{border-bottom:0}.kv .k{color:var(--mut)}.kv .v{font-family:ui-monospace,Menlo,monospace;word-break:break-all;text-align:right}
+
+  /* signal selection cards */
+  .sig{display:flex;align-items:center;gap:14px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;margin:10px 0;cursor:pointer;background:var(--bg2);transition:border-color .15s,background .15s}
+  .sig:hover{border-color:#3a455e}
+  .sig.on{border-color:var(--acc);background:rgba(109,139,255,.10)}
+  .sig .ic{width:38px;height:38px;border-radius:10px;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:19px;flex:0 0 auto}
+  .sig .lbl{flex:1}.sig .lbl .t{font-weight:650}.sig .lbl .d{color:var(--mut);font-size:12.5px}
+  .sig .box{width:22px;height:22px;border-radius:7px;border:2px solid #3a455e;flex:0 0 auto;position:relative;transition:.15s}
+  .sig.on .box{background:var(--acc);border-color:var(--acc)}
+  .sig.on .box::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:800}
+  .sig .st{font-size:12px}
+
+  /* proof rows */
+  .prow{display:flex;align-items:center;gap:13px}
+  .prow .ic{width:34px;height:34px;border-radius:9px;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:17px;flex:0 0 auto}
+  .prow .pinfo{flex:1}.prow .pinfo .t{font-weight:650}.prow .pinfo .d{color:var(--mut);font-size:12px}
+
+  /* success */
+  .success{text-align:center}
+  .success .big{width:66px;height:66px;border-radius:50%;margin:2px auto 12px;background:rgba(70,196,106,.15);color:var(--ok);display:flex;align-items:center;justify-content:center;font-size:32px}
+  #qr{background:#fff;padding:12px;border-radius:12px;display:inline-block;box-shadow:0 10px 28px rgba(0,0,0,.35)}
+
+  /* log console */
+  .console{background:#080a10;border:1px solid var(--line);border-radius:13px;overflow:hidden}
+  .console .hd{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--mut);padding:9px 14px;border-bottom:1px solid var(--line)}
+  #log{font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.6;color:var(--mut);white-space:pre-wrap;word-break:break-word;padding:12px 14px;max-height:240px;overflow:auto;margin:0}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="row" style="justify-content:space-between;">
-    <h1>Composite DID</h1>
-    <div class="muted"><span class="pill mut" id="netBadge">…</span> <span id="acct">not connected</span></div>
+  <div class="top">
+    <div class="brand">
+      <div class="logo">◈</div>
+      <div>
+        <h1>Composite DID</h1>
+        <div class="tag">One soulbound credential from many proofs</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:flex-end">
+      <nav class="hubnav">
+        <a href="/" title="All composite-dids projects">Projects</a>
+        <a href="/vote-app/" title="Decentralized voting">Vote app</a>
+      </nav>
+      <div class="chip" id="walletChip"><span class="dot"></span><span id="netBadge">…</span><span class="acct" id="acct">not connected</span></div>
+    </div>
   </div>
+
   <div class="steps">
-    <span id="step1" class="active">1 · Home</span>
-    <span id="step2">2 · Choose signals</span>
-    <span id="step3">3 · Prove &amp; register</span>
+    <div class="st active" id="step1"><span class="n">1</span> Home</div>
+    <div class="bar"></div>
+    <div class="st" id="step2"><span class="n">2</span> Choose signals</div>
+    <div class="bar"></div>
+    <div class="st" id="step3"><span class="n">3</span> Prove &amp; register</div>
   </div>
 
   <!-- ===================== PAGE 1: HOME ===================== -->
   <section id="page-home">
     <div class="card">
-      <h2>Welcome</h2>
-      <p class="sub">Register a composite decentralised identity. Connect your wallet, prove the required signals, and mint one soulbound credential — in a single on-chain transaction.</p>
+      <h2>Connect to a registry</h2>
+      <p class="sub">Paste the DID registry contract address deployed with the developer tool. The app reads its identity signals and eligibility rule (the AND/OR mechanism) straight from chain, then walks you through proving them and minting one non-transferable credential.</p>
+      <label for="regAddr">Registry contract address</label>
       <div class="row">
-        <button id="connect">Connect wallet</button>
-        <button id="start" disabled>Start registration →</button>
-        <button id="verifyStart" class="secondary" disabled>Verify existing identity →</button>
+        <input id="regAddr" placeholder="0x…" spellcheck="false" autocomplete="off" style="flex:1;min-width:220px;width:auto" />
+        <button id="load">Load</button>
       </div>
-      <div class="kv" style="margin-top:14px;"><span class="k">Registry (from config)</span><span class="v" id="h_registry">loading…</span></div>
-      <div class="kv"><span class="k">Network</span><span class="v" id="h_net">…</span></div>
+
+      <div id="regSummary" class="hidden" style="margin-top:18px">
+        <div class="pcard">
+          <div class="muted" style="margin-bottom:8px">Signals used by this registry</div>
+          <div id="rs_signals"></div>
+        </div>
+        <div class="pcard">
+          <div class="muted" style="margin-bottom:6px">Eligibility</div>
+          <div id="rs_mech"></div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:18px">
+        <button id="connect" class="secondary">Connect wallet</button>
+        <button id="start" disabled>Start registration →</button>
+        <button id="verifyStart" class="secondary" disabled>Verify existing →</button>
+      </div>
+      <div style="margin-top:18px">
+        <div class="kv"><span class="k">Network</span><span class="v" id="h_net">…</span></div>
+      </div>
     </div>
   </section>
 
   <!-- ===================== PAGE 2: CHOOSE SIGNALS ===================== -->
   <section id="page-select" class="hidden">
     <div class="card">
-      <h2>What this registry requires</h2>
+      <h2>Choose your signals</h2>
       <p class="sub" id="s_mech">…</p>
       <div id="s_list"></div>
-      <div class="card" style="background:#0e1220; margin-top:6px;">
-        <div id="s_verdict" class="muted">Select the identities you can prove.</div>
-      </div>
-      <div class="row" style="margin-top:12px;">
+      <div class="pcard" style="margin-top:14px"><div id="s_verdict" class="muted">Select the identities you can prove.</div></div>
+      <div class="row" style="margin-top:16px;">
         <button id="s_back" class="secondary">← Back</button>
         <button id="s_continue" disabled>Continue →</button>
       </div>
@@ -88,20 +174,22 @@
       <h2>Prove &amp; register</h2>
       <p class="sub" id="p_termdesc">…</p>
       <div id="p_list"></div>
-      <div class="row" style="margin-top:12px;">
+      <div class="row" style="margin-top:16px;">
         <button id="p_back" class="secondary">← Back</button>
         <button id="p_register" disabled>Register (one transaction)</button>
       </div>
     </div>
-    <div class="card hidden" id="p_success">
-      <h2>✓ Registered</h2>
-      <div class="kv"><span class="k">Soulbound credential</span><span class="v" id="p_token"></span></div>
-      <div id="qr" style="margin:12px 0;"></div>
-      <p><a id="p_txlink" href="#" target="_blank" rel="noopener">View transaction on Etherscan ↗</a></p>
+    <div class="card success hidden" id="p_success">
+      <div class="big">✓</div>
+      <h2>Registered</h2>
+      <p class="sub" style="margin-bottom:14px">Your soulbound credential has been minted.</p>
+      <div class="kv" style="text-align:left"><span class="k">Credential</span><span class="v" id="p_token"></span></div>
+      <div id="qr" style="margin:16px 0"></div>
+      <div><a id="p_txlink" href="#" target="_blank" rel="noopener">View transaction on Etherscan ↗</a></div>
     </div>
   </section>
 
-  <div class="card"><div id="log">Loading config…</div></div>
+  <div class="console"><div class="hd">Activity</div><div id="log">Loading config…</div></div>
 </div>
 
 <script type="module">
@@ -117,7 +205,12 @@ const NETS = {
   sepolia: { chainId: 11155111, hex: "0xaa36a7", name: "Sepolia", explorer: "https://sepolia.etherscan.io" },
   mainnet: { chainId: 1, hex: "0x1", name: "Ethereum", explorer: "https://etherscan.io" },
 };
+const ICONS = { balance: "💰", github: "🐙", google: "✉️", arxiv: "📄" };
+const NAMES = { balance: "Balance proof", github: "GitHub", google: "Google", arxiv: "arXiv" };
+const sigIcon = (k) => ICONS[k] || "●";
+const sigName = (k) => NAMES[k] || k;
 const ABI_REGISTRY = [
+  "function numSignals() view returns (uint256)",
   "function termCount() view returns (uint256)",
   "function terms(uint256) view returns (uint8)",
   "function termSignals(uint256) view returns (uint8[])",
@@ -130,9 +223,10 @@ const ABI_REGISTRY = [
 const RECLAIM_TUPLE =
   "tuple(tuple(string provider,string parameters,string context) claimInfo," +
   "tuple(tuple(bytes32 identifier,address owner,uint32 timestampS,uint32 epoch) claim,bytes[] signatures) signedClaim)";
-const RECLAIM_VERIFIER = "0xAe94FB09711e1c6B057853a515483792d8e474d0"; // deployed Reclaim verifier (Sepolia)
 
 let CFG, NET, provider, signer, account;
+let CATALOG = {};        // verifier address (lowercase) -> signal metadata from config
+let loaded = false;      // a registry has been read from chain
 let terms = [];          // array of uint8 bitmaps
 let chosenTerm = -1;     // term index to register
 let proofData = {};      // slot -> abi-encoded bytes (generated proof)
@@ -142,10 +236,12 @@ let proofData = {};      // slot -> abi-encoded bytes (generated proof)
   try {
     CFG = await (await fetch("./config.json?t=" + Date.now(), { cache: "no-store" })).json();
     NET = NETS[CFG.network] || NETS.sepolia;
+    CATALOG = {};
+    for (const s of (CFG.signals || [])) if (s.address) CATALOG[s.address.toLowerCase()] = s;
     $("netBadge").textContent = NET.name;
-    $("h_registry").textContent = CFG.registry;
     $("h_net").textContent = NET.name;
-    log("Config loaded. Connect your wallet to begin.");
+    if (CFG.registry) $("regAddr").value = CFG.registry;
+    log("Enter a registry contract address and press Load to read its signals and mechanism.");
   } catch (e) { log("Failed to load config.json: " + e); }
 })();
 
@@ -165,9 +261,9 @@ $("connect").onclick = async () => {
   if (!(await ensureChain())) return;
   account = await signer.getAddress();
   $("acct").textContent = account.slice(0, 6) + "…" + account.slice(-4);
-  $("start").disabled = false;
-  $("verifyStart").disabled = false;
-  log("Connected: " + account);
+  $("walletChip").classList.add("on");
+  updateHomeButtons();
+  log(loaded ? "Connected: " + account : "Connected: " + account + " — now Load a registry to continue.");
 };
 
 function showPage(p) {
@@ -178,8 +274,65 @@ function showPage(p) {
 }
 
 // ---------- PAGE 1 -> 2 ----------
-function registry(readOnly = false) { return new ethers.Contract(CFG.registry, ABI_REGISTRY, readOnly ? provider : signer); }
-const termLabel = (mask) => CFG.signals.filter(s => mask & (1 << s.slot)).map(s => s.key).join(" AND ");
+function readProvider() { return provider || new ethers.JsonRpcProvider(CFG.rpcUrl); }
+function registry(readOnly = false) { return new ethers.Contract(CFG.registry, ABI_REGISTRY, readOnly ? readProvider() : signer); }
+const termLabel = (mask) => CFG.signals.filter(s => mask & (1 << s.slot)).map(s => sigName(s.key)).join(" AND ");
+
+function updateHomeButtons() {
+  const ready = loaded && !!account;
+  $("start").disabled = !ready;
+  $("verifyStart").disabled = !ready;
+}
+
+// Read the registry the user pasted: discover its signals (by matching each on-chain
+// verifier address against the config catalog) and its DNF mechanism, all from chain.
+$("load").onclick = async () => {
+  const raw = $("regAddr").value.trim();
+  if (!ethers.isAddress(raw)) return log("Enter a valid contract address (0x… 40 hex chars).");
+  loaded = false; updateHomeButtons();
+  $("regSummary").classList.add("hidden");
+  log("Reading registry " + raw + " on " + NET.name + " …");
+  try {
+    CFG.registry = ethers.getAddress(raw);
+    const c = registry(true);
+    const n = Number(await c.numSignals());
+    const active = [];
+    for (let s = 0; s < n; s++) {
+      const vaddr = (await c.verifiers(s)).toLowerCase();
+      const meta = CATALOG[vaddr];
+      active.push(meta
+        ? { ...meta, slot: s, address: vaddr }
+        : { slot: s, key: "unknown", label: "Unrecognised verifier " + vaddr.slice(0, 10) + "…", kind: "unknown", address: vaddr });
+    }
+    CFG.signals = active;
+    const tc = Number(await c.termCount());
+    terms = [];
+    for (let i = 0; i < tc; i++) terms.push(Number(await c.terms(i)));
+    renderRegSummary();
+    loaded = true; updateHomeButtons();
+    const unknown = active.filter(s => s.kind === "unknown").length;
+    log("Loaded " + n + " signal(s) and " + tc + " eligibility term(s)." +
+      (unknown ? " " + unknown + " verifier(s) not in this app's catalog — those can't be proven here." : "") +
+      (account ? "" : " Connect your wallet to register."));
+  } catch (e) {
+    log("Could not read registry: " + (e.shortMessage || e.message || e) +
+      " — check the address is a DIDRegistry on " + NET.name + ".");
+  }
+};
+
+function renderRegSummary() {
+  const box = $("rs_signals"); box.innerHTML = "";
+  for (const s of CFG.signals) {
+    const el = document.createElement("span");
+    el.className = "pill " + (s.kind === "unknown" ? "err" : "mut");
+    el.style.marginRight = "6px";
+    el.textContent = sigIcon(s.key) + " " + (s.kind === "unknown" ? "unknown #" + s.slot : sigName(s.key));
+    box.appendChild(el);
+  }
+  $("rs_mech").innerHTML = "Register if you can prove: " +
+    terms.map(t => "(" + termLabel(t) + ")").join(" <b>OR</b> ");
+  $("regSummary").classList.remove("hidden");
+}
 
 let regMode = "register"; // or "verify"
 async function enter(mode) {
@@ -206,7 +359,9 @@ function renderSelect() {
   selected = 0;
   for (const s of CFG.signals) {
     const el = document.createElement("div"); el.className = "sig";
-    el.innerHTML = '<div class="box"></div><div class="lbl"><b>' + s.key + '</b> — ' + s.label + '</div>';
+    el.innerHTML = '<div class="ic">' + sigIcon(s.key) + '</div>' +
+      '<div class="lbl"><div class="t">' + sigName(s.key) + '</div><div class="d">' + s.label + '</div></div>' +
+      '<div class="box"></div>';
     el.onclick = () => { selected ^= (1 << s.slot); el.classList.toggle("on"); evalSelection(); };
     box.appendChild(el);
   }
@@ -252,11 +407,12 @@ function renderProve() {
   const box = $("p_list"); box.innerHTML = "";
   for (const slot of termSlots(mask)) {
     const s = CFG.signals.find(x => x.slot === slot);
-    const row = document.createElement("div"); row.className = "card"; row.style.background = "#0e1220";
-    row.innerHTML = '<div class="row" style="justify-content:space-between;"><div><b>' + s.key + '</b> <span class="muted">' + s.label + '</span></div>' +
+    const row = document.createElement("div"); row.className = "pcard";
+    row.innerHTML = '<div class="prow"><div class="ic">' + sigIcon(s.key) + '</div>' +
+      '<div class="pinfo"><div class="t">' + sigName(s.key) + '</div><div class="d">' + s.label + '</div></div>' +
       '<span class="st" id="st_' + slot + '"><span class="pill mut">pending</span></span></div>' +
-      '<div class="row" style="margin-top:10px;"><button id="gen_' + slot + '">Generate proof</button></div>' +
-      '<div id="extra_' + slot + '" style="margin-top:8px;"></div>';
+      '<div class="row" style="margin-top:12px;"><button id="gen_' + slot + '" class="secondary">Generate proof</button></div>' +
+      '<div id="extra_' + slot + '" class="muted" style="margin-top:10px;"></div>';
     box.appendChild(row);
     $("gen_" + slot).onclick = () => (s.kind === "balance" ? genBalance(s) : genReclaim(s));
   }
@@ -330,46 +486,12 @@ async function genReclaim(s) {
         // identifier and the on-chain verifier rejects it. Canonicalize to match the witness.
         try { onchain.claimInfo.context = canonicalize(JSON.parse(onchain.claimInfo.context)); } catch {}
         let handle = "(received)"; try { handle = JSON.parse(onchain.claimInfo.context).extractedParameters[s.field] || handle; } catch {}
-        // Mirror the contract's hashClaimInfo to predict whether Reclaim.verifyProof will accept it.
-        try {
-          const gotId = onchain.signedClaim.claim.identifier;
-          const ci = onchain.claimInfo;
-          const H = (p, par, c) => ethers.keccak256(ethers.toUtf8Bytes((p || "") + "\n" + (par || "") + "\n" + (c || "")));
-          const eq = (h) => h.toLowerCase() === gotId.toLowerCase();
-          const can = (str) => { try { return canonicalize(JSON.parse(str)); } catch { return str; } };
-          const cands = {
-            raw: H(ci.provider, ci.parameters, ci.context),
-            canonParams: H(ci.provider, can(ci.parameters), ci.context),
-            canonCtx: H(ci.provider, ci.parameters, can(ci.context)),
-            canonBoth: H(ci.provider, can(ci.parameters), can(ci.context)),
-          };
-          if (eq(cands.raw)) { append("  (" + s.key + " ✓ identifier matches)"); }
-          else {
-            const hit = Object.keys(cands).find((k) => eq(cands[k]));
-            if (hit) { append("✦ " + s.key + ": identifier MATCHES via '" + hit + "' — fixable, I'll apply that transform."); }
-            else {
-              append("⚠ " + s.key + ": no candidate matches. id=" + gotId.slice(0, 10) +
-                     " raw=" + cands.raw.slice(0, 10) + " canonParams=" + cands.canonParams.slice(0, 10) +
-                     " canonCtx=" + cands.canonCtx.slice(0, 10) + " canonBoth=" + cands.canonBoth.slice(0, 10));
-            }
-            console.log("RECLAIM " + s.key + " claimInfo:", JSON.stringify(ci), "| identifier:", gotId);
-          }
-        } catch (err) { append("id-check error: " + err.message); }
         proofData[s.slot] = ethers.AbiCoder.defaultAbiCoder().encode([RECLAIM_TUPLE], [onchain]);
         extra.innerHTML = "Captured <b>" + s.field + "</b>: <code>" + handle + "</code>";
         setStatus(s.slot, '<span class="pill ok">ready</span>');
         reclaimActive = false; setAllGen(false);
         refreshRegister();
-        // GROUND TRUTH: ask the deployed Reclaim verifier itself if it accepts this proof.
-        (async () => {
-          try {
-            await new ethers.Contract(RECLAIM_VERIFIER, ["function verifyProof(" + RECLAIM_TUPLE + " proof) view"], provider)
-              .verifyProof.staticCall(onchain);
-            append("  (" + s.key + ": Reclaim verifier ✓ accepts on-chain)");
-          } catch (rvErr) {
-            append("  (" + s.key + ": Reclaim verifier ✗ rejects on-chain — " + (rvErr.shortMessage || rvErr.message || "reverted") + ")");
-          }
-        })();
+        append("✓ " + s.key + " proof ready.");
       },
       onError: (e) => { setStatus(s.slot, '<span class="pill err">failed</span>'); append("✗ Reclaim " + s.key + ": " + (e?.message || e)); reclaimActive = false; setAllGen(false); },
     });

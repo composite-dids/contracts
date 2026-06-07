@@ -7,9 +7,9 @@
     "appSecret": "0x9931e638687b99dc932264046325befa33d2d0ef43ec5067360a9e5976e1aa38"
   },
   "signals": [
-    { "slot": 0, "key": "balance", "label": "Balance ≥ 0.1 ETH (≈100 blocks ago)", "kind": "balance" },
-    { "slot": 1, "key": "github",  "label": "GitHub account",  "kind": "reclaim", "providerId": "6d3f6753-7ee6-49ee-a545-62f1b1822ae5", "field": "username" },
-    { "slot": 2, "key": "google",  "label": "Google email",    "kind": "reclaim", "providerId": "f9f383fd-32d9-4c54-942f-5e9fda349762", "field": "email" },
-    { "slot": 3, "key": "arxiv",   "label": "arXiv (≥1 paper)", "kind": "reclaim", "providerId": "1b28976b-34a2-423a-ba0c-1ef79436efb2", "field": "first_paper_title" }
+    { "key": "balance", "label": "Balance ≥ 0.1 ETH (≈100 blocks ago)", "kind": "balance", "address": "0x3928Ec21D7Ea56E06d46852ff826fc0b960Dfd67" },
+    { "key": "github",  "label": "GitHub account",  "kind": "reclaim", "address": "0xD0C38555d4856F5e2E527C05BB37144C7b1F67a0", "providerId": "6d3f6753-7ee6-49ee-a545-62f1b1822ae5", "field": "username" },
+    { "key": "google",  "label": "Google email",    "kind": "reclaim", "address": "0x94DBC69099741feC95A9B0EF24daAd469761f962", "providerId": "f9f383fd-32d9-4c54-942f-5e9fda349762", "field": "email" },
+    { "key": "arxiv",   "label": "arXiv (≥1 paper)", "kind": "reclaim", "address": "0x7508005264343121D1b748Eef7DA313e74e0560a", "providerId": "1b28976b-34a2-423a-ba0c-1ef79436efb2", "field": "first_paper_title" }
   ]
 }
