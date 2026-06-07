@@ -220,12 +220,14 @@ const ABI_REGISTRY = [
   "function register(uint8 termIndex, bytes[] proofs) returns (uint256)",
   "event Registered(address indexed account, uint8 indexed termIndex, uint8 termMask, uint256 tokenId)",
 ];
+const ABI_KIND = ["function kind() view returns (string)"]; // Reclaim verifiers expose their kind on-chain
 const RECLAIM_TUPLE =
   "tuple(tuple(string provider,string parameters,string context) claimInfo," +
   "tuple(tuple(bytes32 identifier,address owner,uint32 timestampS,uint32 epoch) claim,bytes[] signatures) signedClaim)";
 
 let CFG, NET, provider, signer, account;
-let CATALOG = {};        // verifier address (lowercase) -> signal metadata from config
+let CATALOG = {};        // verifier address (lowercase) -> signal metadata (known/live verifiers)
+let BYKEY = {};          // signal key (e.g. "github") -> metadata; used to resolve fresh verifiers
 let loaded = false;      // a registry has been read from chain
 let terms = [];          // array of uint8 bitmaps
 let chosenTerm = -1;     // term index to register
@@ -236,8 +238,11 @@ let proofData = {};      // slot -> abi-encoded bytes (generated proof)
   try {
     CFG = await (await fetch("./config.json?t=" + Date.now(), { cache: "no-store" })).json();
     NET = NETS[CFG.network] || NETS.sepolia;
-    CATALOG = {};
-    for (const s of (CFG.signals || [])) if (s.address) CATALOG[s.address.toLowerCase()] = s;
+    CATALOG = {}; BYKEY = {};
+    for (const s of (CFG.signals || [])) {
+      if (s.address) CATALOG[s.address.toLowerCase()] = s;
+      if (s.key) BYKEY[s.key.toLowerCase()] = s;
+    }
     $("netBadge").textContent = NET.name;
     $("h_net").textContent = NET.name;
     if (CFG.registry) $("regAddr").value = CFG.registry;
@@ -284,6 +289,23 @@ function updateHomeButtons() {
   $("verifyStart").disabled = !ready;
 }
 
+// Identify a verifier independent of its address: known-address catalog first, then the
+// on-chain kind() that Reclaim verifiers expose, then balance (HBV has no kind()). This
+// makes freshly-deployed verifiers resolve to their proof metadata (providerId/field).
+async function resolveSignal(vaddr) {
+  const known = CATALOG[vaddr];
+  if (known) return { ...known };
+  let kind = null;
+  try {
+    const k = await new ethers.Contract(vaddr, ABI_KIND, readProvider()).kind();
+    kind = (k || "").trim().toLowerCase();
+  } catch { /* no kind() => not a Reclaim verifier */ }
+  if (kind && BYKEY[kind]) return { ...BYKEY[kind] };
+  if (!kind && BYKEY["balance"]) return { ...BYKEY["balance"] };          // HBV / balance verifier
+  if (kind) return { key: kind, label: "Reclaim: " + kind, kind: "reclaim" };
+  return { key: "unknown", label: "Unrecognised verifier " + vaddr.slice(0, 10) + "…", kind: "unknown" };
+}
+
 // Read the registry the user pasted: discover its signals (by matching each on-chain
 // verifier address against the config catalog) and its DNF mechanism, all from chain.
 $("load").onclick = async () => {
@@ -299,10 +321,7 @@ $("load").onclick = async () => {
     const active = [];
     for (let s = 0; s < n; s++) {
       const vaddr = (await c.verifiers(s)).toLowerCase();
-      const meta = CATALOG[vaddr];
-      active.push(meta
-        ? { ...meta, slot: s, address: vaddr }
-        : { slot: s, key: "unknown", label: "Unrecognised verifier " + vaddr.slice(0, 10) + "…", kind: "unknown", address: vaddr });
+      active.push({ ...(await resolveSignal(vaddr)), slot: s, address: vaddr });
     }
     CFG.signals = active;
     const tc = Number(await c.termCount());
