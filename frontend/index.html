@@ -58,7 +58,8 @@
       <p class="sub">Register a composite decentralised identity. Connect your wallet, prove the required signals, and mint one soulbound credential — in a single on-chain transaction.</p>
       <div class="row">
         <button id="connect">Connect wallet</button>
-        <button id="start" class="secondary" disabled>Start registration →</button>
+        <button id="start" disabled>Start registration →</button>
+        <button id="verifyStart" class="secondary" disabled>Verify existing identity →</button>
       </div>
       <div class="kv" style="margin-top:14px;"><span class="k">Registry (from config)</span><span class="v" id="h_registry">loading…</span></div>
       <div class="kv"><span class="k">Network</span><span class="v" id="h_net">…</span></div>
@@ -121,6 +122,7 @@ const ABI_REGISTRY = [
   "function terms(uint256) view returns (uint8)",
   "function termSignals(uint256) view returns (uint8[])",
   "function verifiers(uint256) view returns (address)",
+  "function registrantOf(uint8,bytes32) view returns (address)",
   "function isRegistered(address) view returns (bool)",
   "function register(uint8 termIndex, bytes[] proofs) returns (uint256)",
   "event Registered(address indexed account, uint8 indexed termIndex, uint8 termMask, uint256 tokenId)",
@@ -164,6 +166,7 @@ $("connect").onclick = async () => {
   account = await signer.getAddress();
   $("acct").textContent = account.slice(0, 6) + "…" + account.slice(-4);
   $("start").disabled = false;
+  $("verifyStart").disabled = false;
   log("Connected: " + account);
 };
 
@@ -178,18 +181,22 @@ function showPage(p) {
 function registry(readOnly = false) { return new ethers.Contract(CFG.registry, ABI_REGISTRY, readOnly ? provider : signer); }
 const termLabel = (mask) => CFG.signals.filter(s => mask & (1 << s.slot)).map(s => s.key).join(" AND ");
 
-$("start").onclick = async () => {
+let regMode = "register"; // or "verify"
+async function enter(mode) {
+  regMode = mode;
   try {
-    if (await registry(true).isRegistered(account))
-      append("Note: this wallet already holds a credential. You can register another term if eligible.");
     const tc = Number(await registry(true).termCount());
     terms = [];
     for (let i = 0; i < tc; i++) terms.push(Number(await registry(true).terms(i)));
     renderSelect();
     showPage("select");
-    log("Mechanism loaded. Choose the identities you can prove.");
+    log(mode === "verify"
+      ? "Verify mode: pick the identities, prove them, and I'll confirm they're already registered."
+      : "Register mode: choose the identities you can prove.");
   } catch (e) { log("Could not load mechanism: " + (e.shortMessage || e.message || e)); }
-};
+}
+$("start").onclick = () => enter("register");
+$("verifyStart").onclick = () => enter("verify");
 
 // ---------- PAGE 2: choose signals ----------
 let selected = 0; // bitmap
@@ -238,7 +245,10 @@ function renderProve() {
   reclaimActive = false; // reset the sequential-generation lock on (re)entry
   $("p_success").classList.add("hidden");
   const mask = terms[chosenTerm];
-  $("p_termdesc").innerHTML = "Prove every identity in: <b>" + termLabel(mask) + "</b>. Each proof is generated locally; one transaction verifies them all.";
+  $("p_register").textContent = regMode === "verify" ? "Verify identity exists" : "Register (one transaction)";
+  $("p_termdesc").innerHTML = (regMode === "verify"
+    ? "Prove each identity in <b>" + termLabel(mask) + "</b>, then I'll confirm they're already registered (read-only, no gas)."
+    : "Prove every identity in: <b>" + termLabel(mask) + "</b>. Each proof is generated locally; one transaction verifies them all.");
   const box = $("p_list"); box.innerHTML = "";
   for (const slot of termSlots(mask)) {
     const s = CFG.signals.find(x => x.slot === slot);
@@ -369,7 +379,30 @@ async function genReclaim(s) {
 
 $("p_back").onclick = () => showPage("select");
 const VERIFY_ABI = ["function verifyAndGetWitness(address,bytes) view returns (string)"];
+async function verifyExisting() {
+  try {
+    const slots = termSlots(terms[chosenTerm]);
+    const c = registry(true);
+    log("Verifying each proof and checking the registry (read-only) …");
+    let allExist = true; const owners = new Set();
+    for (const slot of slots) {
+      const s = CFG.signals.find(x => x.slot === slot);
+      let handle;
+      try {
+        const v = new ethers.Contract(await c.verifiers(slot), VERIFY_ABI, provider);
+        handle = await v.verifyAndGetWitness.staticCall(account, proofData[slot]);
+      } catch (e) { append("✗ " + s.key + ": proof invalid (" + (e.shortMessage || e.message || e) + ")"); allExist = false; continue; }
+      const reg = await c.registrantOf(slot, ethers.keccak256(ethers.toUtf8Bytes(handle)));
+      if (reg === ethers.ZeroAddress) { append("✗ " + s.key + " (" + handle + "): NOT registered"); allExist = false; }
+      else { append("✓ " + s.key + " (" + handle + "): registered by " + reg); owners.add(reg.toLowerCase()); }
+    }
+    if (allExist) append("✅ Identity exists — all signals already registered" + (owners.size === 1 ? " (owner " + [...owners][0] + ")" : " (spanning " + owners.size + " addresses)"));
+    else append("❌ Not a registered identity — these signals aren't all in the registry. Use Start registration to register.");
+  } catch (e) { append("✗ " + (e.shortMessage || e.message || e)); }
+}
+
 $("p_register").onclick = async () => {
+  if (regMode === "verify") return verifyExisting();
   try {
     if (!(await ensureChain())) return;
     const slots = termSlots(terms[chosenTerm]);
