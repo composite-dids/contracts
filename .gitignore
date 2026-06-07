@@ -6,3 +6,7 @@ broadcast/
 # Node
 node_modules/
 npm-debug.log*
+
+# Local / OS
+.DS_Store
+.claude/
