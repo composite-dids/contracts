@@ -138,7 +138,7 @@ let proofData = {};      // slot -> abi-encoded bytes (generated proof)
 // ---------- config + wallet ----------
 (async () => {
   try {
-    CFG = await (await fetch("./config.json")).json();
+    CFG = await (await fetch("./config.json?t=" + Date.now(), { cache: "no-store" })).json();
     NET = NETS[CFG.network] || NETS.sepolia;
     $("netBadge").textContent = NET.name;
     $("h_registry").textContent = CFG.registry;
