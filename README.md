@@ -2,17 +2,44 @@
 
 On-chain verification of various types of identity.
 
-## Registration (local only for now!)
-Just run 
-```
-scripts/demo-local.sh
-```
-Follow the instruction locally, can use any signals provided in the following.
+## Composite DID registration (live on Sepolia)
 
-**Unified frontend:** `frontend/index.html` is a single page with tabs for both
-proofs (historical balance, zkTLS identity) sharing one wallet connection, network
-guard, and log — plus the negative-test panels. The standalone pages
-(`balance.html`, `reclaim.html`) still work and are linked from it.
+`DIDRegistry` mints one **soulbound** credential when your wallet satisfies a configurable
+boolean **mechanism** (negation-free DNF) over the identity signals — in a **single
+transaction**. `register(termIndex, proofs[])`:
+
+1. verifies each signal's proof via that signal's `verifyAndGetWitness(claimant, proofData)`
+   (reverts on an invalid proof or one not bound to the caller),
+2. **de-duplicates** against an on-chain hashtable — reusing an identity already registered
+   for a signal (same GitHub handle, paper title, email, address) reverts
+   (`"signal identity already used"`),
+3. records the readable identity and mints the credential — all atomic.
+
+No off-chain proof service: the **balance proof is generated in the browser**
+(`eth_getProof` + header-RLP/keccak), the Reclaim proofs come from the Reclaim SDK.
+
+Deployed on Sepolia (mechanism = `balance AND github AND google AND arxiv`):
+
+| | address |
+|---|---|
+| **DIDRegistry** | `0x4c1E944F9775DF54DeE0D9f084301dAB83812208` |
+| signal0 balance — HistoricalBalanceVerifier | `0x3928Ec21D7Ea56E06d46852ff826fc0b960Dfd67` |
+| signal1 github  — GithubIdentity | `0xD0C38555d4856F5e2E527C05BB37144C7b1F67a0` |
+| signal2 google  — GoogleIdentity | `0x94DBC69099741feC95A9B0EF24daAd469761f962` |
+| signal3 arxiv   — ArxivIdentity  | `0x7508005264343121D1b748Eef7DA313e74e0560a` |
+
+Each signal implements `ISignalVerifier.verifyAndGetWitness(address,bytes) → string`.
+Deploy with `scripts/deploy.sh` (the 4 signals) + `scripts/deploy-did-registry.sh` (registry).
+
+**Frontend:** `frontend/index.html` is a 3-step flow — **Home** (connect; registry from
+`config.json`) → **Choose signals** (shows the AND/OR mechanism; tells you if your selection
+is enough) → **Prove & register** (generate each proof locally, then one tx; success shows a
+QR + Etherscan link). Serve `frontend/` over http and open it.
+
+> Legacy/stale (predate this rewrite, not wired to the new flow): `frontend/balance.html`,
+> `frontend/reclaim.html` (standalone single-signal testers, old addresses), and the merged
+> `frontend/register.html`, `did-register-tool/`, `scripts/demo-local.sh` (SMT-era). Safe to
+> remove — superseded by the 3-step `index.html`.
 
 ## Deploying (Sepolia)
 

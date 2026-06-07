@@ -1,0 +1,15 @@
+{
+  "network": "sepolia",
+  "registry": "0xb1768B404EB4102CCF4DBc0c9b661a17D48dcef8",
+  "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+  "reclaim": {
+    "appId": "0xFe1b1682Fb71e59fE7579e7a10324e8211c3c688",
+    "appSecret": "0x9931e638687b99dc932264046325befa33d2d0ef43ec5067360a9e5976e1aa38"
+  },
+  "signals": [
+    { "slot": 0, "key": "balance", "label": "Balance ≥ 0.1 ETH (≈100 blocks ago)", "kind": "balance" },
+    { "slot": 1, "key": "github",  "label": "GitHub account",  "kind": "reclaim", "providerId": "6d3f6753-7ee6-49ee-a545-62f1b1822ae5", "field": "username" },
+    { "slot": 2, "key": "google",  "label": "Google email",    "kind": "reclaim", "providerId": "f9f383fd-32d9-4c54-942f-5e9fda349762", "field": "email" },
+    { "slot": 3, "key": "arxiv",   "label": "arXiv (≥1 paper)", "kind": "reclaim", "providerId": "1b28976b-34a2-423a-ba0c-1ef79436efb2", "field": "first_paper_title" }
+  ]
+}

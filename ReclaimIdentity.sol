@@ -115,6 +115,38 @@ abstract contract ReclaimIdentity {
     ///      so GitHub/Google behave exactly as before.
     function _afterExtract(string memory context, string memory handle) internal view virtual {}
 
+    /// @notice DIDRegistry signal accessor: a unique, account-independent witness for the
+    ///         identity `account` proved (the hash of its handle), or 0 if not verified.
+    ///         Same off-chain account => same witness, so it can't be reused across wallets.
+    function identityWitness(address account) external view returns (bytes32) {
+        if (!isVerified[account]) return bytes32(0);
+        return keccak256(bytes(handleOf[account]));
+    }
+
+    /// @notice Stateless verifier entrypoint for one-transaction registration. Validates a
+    ///         Reclaim proof bound to `claimant` and returns its readable identity handle
+    ///         (e.g. the GitHub username / email / first paper title). Reverts if invalid.
+    ///         `proofData` is `abi.encode(Proof)`. No state is written here — the registry
+    ///         records the result and enforces de-duplication.
+    function verifyAndGetWitness(address claimant, bytes calldata proofData)
+        external
+        view
+        returns (string memory handle)
+    {
+        Proof memory proof = abi.decode(proofData, (Proof));
+        reclaim.verifyProof(proof);
+
+        string memory context = proof.claimInfo.context;
+        if (bindProvider) {
+            require(keccak256(bytes(_extract(context, '"providerHash":"'))) == expectedProviderHashKeccak, "wrong provider");
+        }
+        require(_toAddress(_extract(context, '"contextAddress":"')) == claimant, "caller != context address");
+
+        handle = _extract(context, fieldKey);
+        require(bytes(handle).length > 0, "handle not found");
+        _afterExtract(context, handle);
+    }
+
     // ---------------------------------------------------------------------
     // context parsing (ported from Reclaim's Claims.extractFieldFromContext)
     // ---------------------------------------------------------------------

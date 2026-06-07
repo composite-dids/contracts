@@ -55,6 +55,16 @@ contract HistoricalBalanceVerifier {
         address account,
         bytes[] calldata accountProof
     ) public view returns (uint256 balanceWei) {
+        return _verifyBalanceAt(targetBlock, headerRLP, account, accountProof);
+    }
+
+    /// @dev Memory variant so it can be driven from abi.decode'd registry input.
+    function _verifyBalanceAt(
+        uint256 targetBlock,
+        bytes memory headerRLP,
+        address account,
+        bytes[] memory accountProof
+    ) internal view returns (uint256 balanceWei) {
         require(targetBlock < block.number, "target not in past");
         uint256 age = block.number - targetBlock;
         require(age >= MIN_AGE && age <= MAX_AGE, "outside block window");
@@ -74,6 +84,36 @@ contract HistoricalBalanceVerifier {
         balanceWei = _accountBalance(accountRLP);
     }
 
+    /// @notice Stateless verifier entrypoint for one-transaction registration. Verifies the
+    ///         balance proof for `claimant`, requires >= MIN_BALANCE_WEI, and returns the
+    ///         readable identity handle (the account address as a string). Reverts otherwise.
+    ///         `proofData` is `abi.encode(uint256 targetBlock, bytes headerRLP, bytes[] accountProof)`.
+    function verifyAndGetWitness(address claimant, bytes calldata proofData)
+        external
+        view
+        returns (string memory handle)
+    {
+        (uint256 targetBlock, bytes memory headerRLP, bytes[] memory accountProof) =
+            abi.decode(proofData, (uint256, bytes, bytes[]));
+        uint256 bal = _verifyBalanceAt(targetBlock, headerRLP, claimant, accountProof);
+        require(bal >= MIN_BALANCE_WEI, "balance below minimum");
+        return _addrToString(claimant);
+    }
+
+    /// @dev Lowercase 0x-hex string of an address (the readable balance witness).
+    function _addrToString(address a) internal pure returns (string memory) {
+        bytes16 hexd = "0123456789abcdef";
+        bytes memory out = new bytes(42);
+        out[0] = "0"; out[1] = "x";
+        uint160 v = uint160(a);
+        for (uint256 i = 0; i < 20; i++) {
+            uint8 b = uint8(v >> (8 * (19 - i)));
+            out[2 + i * 2] = hexd[b >> 4];
+            out[3 + i * 2] = hexd[b & 0x0f];
+        }
+        return string(out);
+    }
+
     // ---------------------------------------------------------------------
     // Stateful: prove that *the caller* held >= MIN_BALANCE_WEI in the past.
     // The account is msg.sender, so the transaction signature itself proves
@@ -88,6 +128,12 @@ contract HistoricalBalanceVerifier {
         require(balanceWei >= MIN_BALANCE_WEI, "balance below minimum");
         isEligible[msg.sender] = true;
         emit EligibilityProven(msg.sender, targetBlock, balanceWei);
+    }
+
+    /// @notice DIDRegistry signal accessor: a unique witness for an eligible account
+    ///         (the account itself), or 0 if it hasn't proven the balance threshold.
+    function identityWitness(address account) external view returns (bytes32) {
+        return isEligible[account] ? keccak256(abi.encodePacked("balance:", account)) : bytes32(0);
     }
 
     // ---------------------------------------------------------------------
@@ -108,7 +154,7 @@ contract HistoricalBalanceVerifier {
         return abi.decode(out, (bytes32));
     }
 
-    function _parseHeader(bytes calldata headerRLP)
+    function _parseHeader(bytes memory headerRLP)
         internal
         pure
         returns (bytes32 stateRoot, uint256 number)

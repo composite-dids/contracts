@@ -101,6 +101,16 @@ contract HistoricalBalanceTest is Test {
         assertEq(bal, balanceWei, "end-to-end verified balance");
     }
 
+    function testFork_VerifyAndGetWitness() public {
+        vm.createSelectFork(rpc, forkBlock);
+        ExposedVerifier v = new ExposedVerifier(1, 0.1 ether);
+        bytes memory proofData = abi.encode(targetBlock, headerRLP, accountProof);
+        string memory handle = v.verifyAndGetWitness(addr, proofData);
+        assertEq(bytes(handle).length, 42, "handle is a 0x-address string");
+        assertEq(bytes(handle)[0], bytes1("0"));
+        assertEq(bytes(handle)[1], bytes1("x"));
+    }
+
     function testFork_ProveSelfBalance() public {
         vm.createSelectFork(rpc, forkBlock);
         ExposedVerifier v = new ExposedVerifier(1, 0.1 ether);
